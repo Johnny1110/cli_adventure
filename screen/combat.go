@@ -38,6 +38,7 @@ import (
 	"cli_adventure/asset"
 	"cli_adventure/combat"
 	"cli_adventure/entity"
+	netpkg "cli_adventure/net"
 	"cli_adventure/render"
 )
 
@@ -106,6 +107,25 @@ type CombatScreen struct {
 	shakeIntensity float64
 	shakeX, shakeY float64
 	shakeBuf       *ebiten.Image // offscreen buffer for shake effect
+
+	// Multiplayer hooks (nil in single-player).
+	// When a session is attached AND the local player is the host, we
+	// mirror authoritative state changes (monster HP, end result) to
+	// every connected client. The host still drives its own combat
+	// engine — clients are spectators submitting actions via MsgCombatAction,
+	// which the host harvests between turns.
+	session *netpkg.Session
+	announcedStart bool
+	lastBroadcastMonHP int
+}
+
+// NewCombatScreenCoop creates a combat screen wired to a live session.
+// It's a thin wrapper so single-player tests never touch the net package.
+func NewCombatScreenCoop(switcher ScreenSwitcher, player *entity.Player, monster *entity.Monster, areaKey string, retX, retY int, sess *netpkg.Session) *CombatScreen {
+	c := NewCombatScreenAt(switcher, player, monster, areaKey, retX, retY)
+	c.session = sess
+	c.lastBroadcastMonHP = monster.HP
+	return c
 }
 
 func NewCombatScreen(switcher ScreenSwitcher, player *entity.Player, monster *entity.Monster, areaKey string) *CombatScreen {
@@ -152,6 +172,9 @@ func (c *CombatScreen) Update() error {
 
 	// Smooth HP bar animation
 	c.animateHPBars()
+
+	// Multiplayer mirroring: announce start once and push HP diffs.
+	c.syncCombatToSession()
 
 	switch c.uiState {
 	case cuiIntro:
@@ -461,11 +484,40 @@ func (c *CombatScreen) updateLevelUp() {
 // returnAfterVictory goes to the ending screen if boss was defeated,
 // otherwise returns to the wild area at the player's pre-combat position.
 func (c *CombatScreen) returnAfterVictory() {
+	// Broadcast the win to every connected peer so their co-op screens
+	// can apply rewards and exit. Safe when session is nil.
+	if c.session != nil {
+		c.session.EndCombat(true, c.xpGained, c.coinsGained)
+	}
 	if c.monster.IsBoss {
 		// Boss defeated — show the ending!
 		c.switcher.SwitchScreen(NewEndingScreen(c.switcher, c.player))
 	} else {
 		c.switcher.SwitchScreen(NewWildScreenAt(c.switcher, c.player, c.areaKey, c.returnX, c.returnY))
+	}
+}
+
+// syncCombatToSession is the per-tick multiplayer mirror. It's a no-op
+// in single-player (session == nil). On the host side it:
+//
+//   - Opens the shared combat on the first tick (StartCombat).
+//   - Broadcasts monster HP whenever it changes.
+//   - Broadcasts short log text for big events (hit, heal, miss) so
+//     clients have something to read.
+//
+// This file keeps combat authority inside combat.Engine. All we're doing
+// here is mirroring visible state.
+func (c *CombatScreen) syncCombatToSession() {
+	if c.session == nil {
+		return
+	}
+	if !c.announcedStart {
+		c.session.StartCombat(c.monster.Name, c.monster.Name, c.monster.HP, c.monster.MaxHP)
+		c.announcedStart = true
+	}
+	if c.monster.HP != c.lastBroadcastMonHP {
+		c.session.SetMonsterHP(c.monster.HP)
+		c.lastBroadcastMonHP = c.monster.HP
 	}
 }
 
@@ -479,12 +531,20 @@ func (c *CombatScreen) updateDefeat() {
 	// On Z, return to menu (restart)
 	if inpututil.IsKeyJustPressed(ebiten.KeyZ) || inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
 		if c.animTick >= 30 {
+			// Announce the loss to every peer before tearing down.
+			if c.session != nil {
+				c.session.EndCombat(false, 0, 0)
+			}
 			// Heal player and send back to town (mercy mechanic)
 			c.player.Stats.HP = c.player.Stats.MaxHP
 			c.player.Stats.MP = c.player.Stats.MaxMP
 			// Lose some coins as penalty
 			c.player.Coins = c.player.Coins * 3 / 4
-			c.switcher.SwitchScreen(NewTownScreen(c.switcher, c.player))
+			if c.session != nil {
+				c.switcher.SwitchScreen(NewTownScreenMP(c.switcher, c.player, c.session))
+			} else {
+				c.switcher.SwitchScreen(NewTownScreen(c.switcher, c.player))
+			}
 		}
 	}
 }

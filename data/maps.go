@@ -36,6 +36,7 @@ const (
 	FB = asset.TileFlowerBlue
 	SI = asset.TileSign
 	WE = asset.TileWell
+	WH = asset.TileWormhole
 )
 
 // TownWidth and TownHeight in tiles.
@@ -57,7 +58,7 @@ var TownGround = [TownHeight][TownWidth]int{
 	{TR, G,  G,  P,  G,  FP, G,  G,  G,  P,  P,  P,  G,  G,  FB, G,  P,  G,  G,  TR}, // 7
 	{TR, G,  G,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  G,  G,  TR}, // 8  main road
 	{TR, G,  G,  G,  G,  G,  G,  G,  G,  P,  SI, P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 9
-	{TR, G,  FP, G,  G,  G,  G,  FB, G,  P,  G,  P,  G,  FP, G,  G,  G,  FB, G,  TR}, // 10
+	{TR, G,  FP, G,  G,  G,  G,  FB, G,  P,  G,  P,  G,  WH, G,  G,  G,  FB, G,  TR}, // 10 — wormhole at (13,10)
 	{TR, G,  G,  G,  G,  G,  G,  G,  G,  P,  G,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 11
 	{TR, WA, WA, WA, WA, G,  G,  G,  G,  P,  G,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 12
 	{TR, WA, WA, WA, WA, G,  G,  G,  G,  P,  G,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 13
@@ -126,3 +127,11 @@ func TownNPCs() []NPCSpawn {
 
 // TownExitTile is the tile position of the south exit (leads to Wild).
 var TownExitY = 17
+
+// Wormhole tile position in the town. Players can face it and press Z to
+// open the multiplayer menu. The tile itself is walkable (stepping onto it
+// also triggers the wormhole screen) to make discovery easier for new players.
+const (
+	TownWormholeX = 13
+	TownWormholeY = 10
+)

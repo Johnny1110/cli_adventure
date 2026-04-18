@@ -25,6 +25,7 @@ import (
 	"cli_adventure/asset"
 	"cli_adventure/data"
 	"cli_adventure/entity"
+	netpkg "cli_adventure/net"
 	"cli_adventure/render"
 )
 
@@ -83,6 +84,23 @@ type TownScreen struct {
 
 	// Interaction tracking
 	interactNPC *entity.NPC
+
+	// Multiplayer session (nil in single-player).
+	session *netpkg.Session
+	// Last input we forwarded to the host (client side) — avoids spamming
+	// duplicate messages every tick.
+	lastDX, lastDY int
+}
+
+// NewTownScreenMP creates a multiplayer-aware town screen wired to a live
+// Session. All remote players are drawn alongside the local player, and
+// client-side inputs are forwarded to the host.
+func NewTownScreenMP(switcher ScreenSwitcher, player *entity.Player, sess *netpkg.Session) *TownScreen {
+	t := NewTownScreen(switcher, player)
+	t.session = sess
+	// Seed the session with our own position so the host/room sees us.
+	sess.SetMyPosition("town", t.tileX, t.tileY, int(t.facing), player.Stats.HP, player.Stats.MaxHP)
+	return t
 }
 
 // NewTownScreen creates the town screen.
@@ -185,6 +203,9 @@ func (t *TownScreen) Update() error {
 	centerY := int(t.pixelY) + render.TileSize/2
 	t.camera.Follow(centerX, centerY)
 
+	// Push our position into the shared session (no-op in single-player).
+	t.syncSession()
+
 	return nil
 }
 
@@ -220,7 +241,18 @@ func (t *TownScreen) updateWalking() {
 
 	// Check for exit (south edge)
 	if t.tileY >= data.TownExitY {
-		// Transition to wild (stub for now)
+		// In multiplayer, the host is the one who changes area. Remote
+		// clients will automatically be pulled along by the host's
+		// area_change broadcast (see net/client.go).
+		if t.session != nil && t.session.Role() == netpkg.RoleHost {
+			t.session.BroadcastAreaChange("forest", 10, 2)
+		}
+		if t.session != nil && t.session.Role() == netpkg.RoleClient {
+			// Clients don't initiate — roll back onto the exit tile.
+			t.tileY = data.TownExitY - 1
+			t.pixelY = float64(t.tileY * render.TileSize)
+			return
+		}
 		t.switcher.SwitchScreen(NewWildScreen(t.switcher, t.player, "forest"))
 		return
 	}
@@ -242,11 +274,23 @@ func (t *TownScreen) updateWalking() {
 	}
 
 	if newX != t.tileX || newY != t.tileY {
-		// Check collision with map
-		if !t.tileMap.IsSolid(newX, newY) && !t.isNPCAt(newX, newY) {
+		// Check collision with map (and, in multiplayer, other players)
+		if !t.tileMap.IsSolid(newX, newY) && !t.isNPCAt(newX, newY) && !t.isRemoteAt(newX, newY) {
+			dx := newX - t.tileX
+			dy := newY - t.tileY
 			t.tileX = newX
 			t.tileY = newY
 			t.moving = true
+			// Forward input to the host (client side only — the host
+			// applies its movement locally).
+			if t.session != nil && t.session.Role() == netpkg.RoleClient {
+				t.session.SubmitInput(netpkg.InputMsg{DX: dx, DY: dy})
+			}
+			// Auto-trigger wormhole when stepping onto the tile.
+			if t.tileX == data.TownWormholeX && t.tileY == data.TownWormholeY {
+				t.openWormhole()
+				return
+			}
 		}
 	}
 
@@ -316,8 +360,35 @@ func (t *TownScreen) tryInteract() {
 				"A quiet town at the\nedge of the forest.",
 			})
 			t.state = townTalking
+			return
+		}
+		// Wormhole: opens the multiplayer lobby. Works both facing the
+		// tile and standing on it (the player naturally walks onto it).
+		if data.TownGround[fy][fx] == asset.TileWormhole {
+			t.openWormhole()
+			return
 		}
 	}
+	// Also trigger wormhole if we're standing on it.
+	if t.tileX == data.TownWormholeX && t.tileY == data.TownWormholeY {
+		t.openWormhole()
+	}
+}
+
+// openWormhole transitions to the multiplayer menu. If we already have a
+// session, we stay in town — the wormhole tile becomes inert (a visual
+// reminder of the active room) after you've entered.
+func (t *TownScreen) openWormhole() {
+	if t.session != nil {
+		// Already in a session — show a brief hint instead of reopening.
+		t.dialogue = render.NewDialogueBox([]string{
+			"The wormhole hums.",
+			"You are already\nlinked to a room.",
+		})
+		t.state = townTalking
+		return
+	}
+	t.switcher.SwitchScreen(NewWormholeScreen(t.switcher, t.player, t))
 }
 
 func (t *TownScreen) startMerchantDialogue() {
@@ -507,6 +578,47 @@ func (t *TownScreen) isNPCAt(x, y int) bool {
 	return false
 }
 
+// isRemoteAt returns true when another multiplayer peer occupies the tile.
+// Prevents the local player from walking "through" a remote co-op player.
+func (t *TownScreen) isRemoteAt(x, y int) bool {
+	if t.session == nil {
+		return false
+	}
+	for _, p := range t.session.RemotePlayers("town") {
+		if p.TileX == x && p.TileY == y {
+			return true
+		}
+	}
+	return false
+}
+
+// syncSession pushes the local player's position into the shared Session
+// so the host/broadcaster can include us in the authoritative snapshot.
+// Called once per tick.
+func (t *TownScreen) syncSession() {
+	if t.session == nil {
+		return
+	}
+	t.session.SetMyPosition("town", t.tileX, t.tileY, int(t.facing),
+		t.player.Stats.HP, t.player.Stats.MaxHP)
+	// Drain peer-level events so screens can react (e.g. combat_start).
+	for _, ev := range t.session.PopEvents() {
+		switch ev.Kind {
+		case "combat_start":
+			// Host opened combat — all clients follow them in.
+			// (Host side switched screens through its own SwitchScreen
+			// when it initiated the fight; clients need this trigger.)
+			if t.session.Role() == netpkg.RoleClient {
+				t.switcher.SwitchScreen(NewCombatCoopScreen(t.switcher, t.player, t.session, t))
+			}
+		case "area_change":
+			if t.session.Role() == netpkg.RoleClient && ev.Area != "" && ev.Area != "town" {
+				t.switcher.SwitchScreen(NewWildScreen(t.switcher, t.player, ev.Area))
+			}
+		}
+	}
+}
+
 // ---- Draw ----
 
 func (t *TownScreen) Draw(screen *ebiten.Image) {
@@ -515,6 +627,10 @@ func (t *TownScreen) Draw(screen *ebiten.Image) {
 
 	// Draw NPCs
 	t.drawNPCs(screen)
+
+	// Draw remote players (co-op party members) before the local player
+	// so the local sprite renders on top when they overlap (purely visual).
+	t.drawRemotePlayers(screen)
 
 	// Draw player
 	t.drawPlayer(screen)
@@ -551,6 +667,38 @@ func (t *TownScreen) drawPlayer(screen *ebiten.Image) {
 	sheet.DrawFrame(screen, frame, sx, sy)
 }
 
+// drawRemotePlayers paints every other party member on the town map.
+// We reuse the same character sprite sheets (Knight/Mage/Archer) so a
+// remote Knight looks like the local Knight. A small name tag floats
+// above their head so you can tell who's who at a glance.
+func (t *TownScreen) drawRemotePlayers(screen *ebiten.Image) {
+	if t.session == nil {
+		return
+	}
+	for _, rp := range t.session.RemotePlayers("town") {
+		sheet, ok := t.charSprites[rp.Class]
+		if !ok {
+			continue
+		}
+		sx := float64(rp.TileX*render.TileSize) - float64(t.camera.X)
+		sy := float64(rp.TileY*render.TileSize) - float64(t.camera.Y)
+		// Skip off-screen draws — screen is 160x144.
+		if sx < -16 || sx > 160 || sy < -16 || sy > 144 {
+			continue
+		}
+		sheet.DrawFrame(screen, 0, sx, sy)
+		// Name tag
+		label := rp.Name
+		if len(label) > 10 {
+			label = label[:10]
+		}
+		render.DrawText(screen, label,
+			int(sx)+8-render.TextWidth(label)/2,
+			int(sy)-8,
+			render.ColorMint)
+	}
+}
+
 func (t *TownScreen) drawNPCs(screen *ebiten.Image) {
 	for _, npc := range t.npcs {
 		sprite, ok := t.npcSprites[npc.Role]
@@ -579,6 +727,12 @@ func (t *TownScreen) drawHUD(screen *ebiten.Image) {
 
 	// Bottom-right: key hints
 	render.DrawText(screen, "Z:Talk X:Menu E:Equip", 22, 136, render.ColorDarkGray)
+
+	// "Linked" indicator when a multiplayer session is live.
+	if t.session != nil {
+		peers := t.session.RemotePlayers("")
+		render.DrawText(screen, "LINK "+intToStr(len(peers)+1), 2, 10, render.ColorLavender)
+	}
 }
 
 func (t *TownScreen) drawShop(screen *ebiten.Image) {

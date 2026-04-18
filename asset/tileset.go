@@ -9,6 +9,7 @@
 //   1 = path_stone      5 = wall_mid       9 = water         13 = flowers_blue
 //   2 = path_dirt       6 = roof_left     10 = bridge        14 = sign
 //   3 = wall_bottom     7 = roof_right    11 = tree          15 = well
+//  16 = wormhole (animated portal — multiplayer entrypoint)
 package asset
 
 import (
@@ -34,6 +35,7 @@ const (
 	TileFlowerBlue = 13
 	TileSign       = 14
 	TileWell       = 15
+	TileWormhole   = 16 // swirling portal — interactable
 )
 
 // townTileColors defines the dominant color for each placeholder tile.
@@ -55,6 +57,7 @@ var townTileColors = map[int]tiledef{
 	TileFlowerBlue: {bg: c(80, 160, 80), pattern: "flower_blue"},
 	TileSign:       {bg: c(80, 160, 80), pattern: "sign"},
 	TileWell:       {bg: c(130, 130, 140), pattern: "well"},
+	TileWormhole:   {bg: c(80, 160, 80), pattern: "wormhole"},
 }
 
 type tiledef struct {
@@ -67,10 +70,11 @@ func c(r, g, b uint8) color.RGBA {
 }
 
 // GenerateTownTileset creates a placeholder tileset image.
-// Layout: 8 columns x 2 rows = 16 tiles, each 16x16.
+// Layout: 8 columns x 3 rows (24 cells) — only 17 IDs are used, the rest
+// stay transparent and are never referenced by a map cell.
 func GenerateTownTileset() *ebiten.Image {
 	cols := 8
-	rows := 2
+	rows := 3
 	img := ebiten.NewImage(cols*16, rows*16)
 
 	for id := 0; id < cols*rows; id++ {
@@ -250,6 +254,37 @@ func drawTile(img *ebiten.Image, ox, oy int, def tiledef) {
 		for x := 5; x < 12; x++ {
 			img.Set(ox+x, oy+6, wood)
 			img.Set(ox+x, oy+9, wood)
+		}
+
+	case "wormhole":
+		// Grass background + a swirling portal.
+		// We draw the portal as concentric rings in shifting pastel hues so it
+		// reads as "magical / interactive" even at 16x16.
+		drawTile(img, ox, oy, tiledef{bg: def.bg, pattern: "grass"})
+		outer := c(120, 80, 200) // deep violet
+		mid := c(180, 130, 255)  // lavender
+		inner := c(230, 200, 255) // near-white sparkle
+		core := c(255, 240, 255)
+		// Elliptical portal footprint (cx,cy) = tile center.
+		cx, cy := 8, 8
+		for y := 2; y < 14; y++ {
+			for x := 2; x < 14; x++ {
+				dx := x - cx
+				dy := y - cy
+				// r2 = scaled squared distance; y squeezed so the portal
+				// reads as a tilted oval rather than a perfect circle.
+				r2 := dx*dx*3 + dy*dy*4
+				switch {
+				case r2 < 18:
+					img.Set(ox+x, oy+y, core)
+				case r2 < 40:
+					img.Set(ox+x, oy+y, inner)
+				case r2 < 80:
+					img.Set(ox+x, oy+y, mid)
+				case r2 < 130:
+					img.Set(ox+x, oy+y, outer)
+				}
+			}
 		}
 
 	case "well":
