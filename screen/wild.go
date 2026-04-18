@@ -28,6 +28,7 @@ import (
 	"cli_adventure/asset"
 	"cli_adventure/data"
 	"cli_adventure/entity"
+	netpkg "cli_adventure/net"
 	"cli_adventure/render"
 )
 
@@ -82,6 +83,51 @@ type WildScreen struct {
 
 	// Particles
 	particles *render.ParticleSystem
+
+	// Multiplayer session (nil in single-player). When set:
+	//   - Client never triggers encounters or area changes; it follows the
+	//     host via area_change / combat_start session events.
+	//   - Host broadcasts area transitions before switching screens so the
+	//     client can follow. Host uses NewCombatScreenCoop to keep battles
+	//     mirrored.
+	session *netpkg.Session
+}
+
+// areaStart returns the default start tile for an area, or (5,5) as a
+// neutral fallback. Used when the host announces an area change so the
+// client's snapshot has a sane tile before its own SetMyPosition arrives.
+func areaStart(name string) (int, int) {
+	if name == "town" {
+		return 9, 10
+	}
+	if a, ok := data.AllAreas()[name]; ok && a != nil {
+		return a.PlayerStartX, a.PlayerStartY
+	}
+	return 5, 5
+}
+
+// NewWildScreenMP creates a wild screen wired to a live multiplayer session.
+// The session is carried through every further transition (wild→wild,
+// wild→combat, wild→town) so peers stay linked.
+func NewWildScreenMP(switcher ScreenSwitcher, player *entity.Player, areaName string, sess *netpkg.Session) *WildScreen {
+	w := NewWildScreenAt(switcher, player, areaName, -1, -1)
+	w.session = sess
+	if sess != nil {
+		sess.SetMyPosition(areaName, w.tileX, w.tileY, int(w.facing),
+			player.Stats.HP, player.Stats.MaxHP)
+	}
+	return w
+}
+
+// NewWildScreenMPAt is the session-aware variant of NewWildScreenAt.
+func NewWildScreenMPAt(switcher ScreenSwitcher, player *entity.Player, areaName string, tileX, tileY int, sess *netpkg.Session) *WildScreen {
+	w := NewWildScreenAt(switcher, player, areaName, tileX, tileY)
+	w.session = sess
+	if sess != nil {
+		sess.SetMyPosition(areaName, w.tileX, w.tileY, int(w.facing),
+			player.Stats.HP, player.Stats.MaxHP)
+	}
+	return w
 }
 
 // NewWildScreen creates a wild exploration screen starting in the given area
@@ -182,7 +228,60 @@ func (w *WildScreen) Update() error {
 	centerY := int(w.pixelY) + render.TileSize/2
 	w.camera.Follow(centerX, centerY)
 
+	// Push our position into the shared session (no-op in single-player)
+	// and react to remote events (host-driven area changes, combat start).
+	w.syncSession()
+
 	return nil
+}
+
+// syncSession is the per-tick multiplayer heartbeat. Mirrors town.go's
+// version: push our own tile position/HP into the session so the host
+// (or other peers via the host's rebroadcast) sees us, then drain the
+// event queue for host-initiated transitions.
+func (w *WildScreen) syncSession() {
+	if w.session == nil {
+		return
+	}
+	w.session.SetMyPosition(w.area.MapKey, w.tileX, w.tileY, int(w.facing),
+		w.player.Stats.HP, w.player.Stats.MaxHP)
+	for _, ev := range w.session.PopEvents() {
+		switch ev.Kind {
+		case "combat_start":
+			// Only the client should auto-switch; the host opens combat
+			// through its own flow (triggerEncounter → NewCombatScreenCoop)
+			// and has already switched screens by the time this fires.
+			if w.session.Role() == netpkg.RoleClient {
+				w.switcher.SwitchScreen(NewCombatCoopScreen(w.switcher, w.player, w.session, w))
+			}
+		case "area_change":
+			if w.session.Role() != netpkg.RoleClient {
+				continue
+			}
+			if ev.Area == "town" {
+				w.switcher.SwitchScreen(NewTownScreenMP(w.switcher, w.player, w.session))
+				return
+			}
+			if ev.Area != "" && ev.Area != w.area.MapKey {
+				w.switcher.SwitchScreen(NewWildScreenMP(w.switcher, w.player, ev.Area, w.session))
+				return
+			}
+		}
+	}
+}
+
+// isRemoteAt returns true when another peer occupies the given tile in
+// the current area — prevents peers from walking through each other.
+func (w *WildScreen) isRemoteAt(x, y int) bool {
+	if w.session == nil {
+		return false
+	}
+	for _, p := range w.session.RemotePlayers(w.area.MapKey) {
+		if p.TileX == x && p.TileY == y {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *WildScreen) updateWalking() {
@@ -230,10 +329,17 @@ func (w *WildScreen) updateWalking() {
 	}
 
 	if newX != w.tileX || newY != w.tileY {
-		if !w.tileMap.IsSolid(newX, newY) {
+		if !w.tileMap.IsSolid(newX, newY) && !w.isRemoteAt(newX, newY) {
+			dx := newX - w.tileX
+			dy := newY - w.tileY
 			w.tileX = newX
 			w.tileY = newY
 			w.moving = true
+			// Forward input to host (client side only). Host applies its
+			// own movement locally.
+			if w.session != nil && w.session.Role() == netpkg.RoleClient {
+				w.session.SubmitInput(netpkg.InputMsg{DX: dx, DY: dy})
+			}
 		}
 	}
 
@@ -265,15 +371,31 @@ func (w *WildScreen) updateWalking() {
 
 // onStepComplete is called when the player finishes moving to a new tile.
 func (w *WildScreen) onStepComplete() {
-	// Check area transitions
+	// Check area transitions. In multiplayer, only the host initiates these;
+	// clients follow via the area_change event dispatched from syncSession.
+	if w.session != nil && w.session.Role() == netpkg.RoleClient {
+		// Still drop treasure/fairy/boss logic on the floor for clients —
+		// those are host-authoritative too.
+		return
+	}
 	for _, conn := range w.area.Connections {
 		if w.tileY == conn.FromY && w.tileX >= conn.FromMinX && w.tileX <= conn.FromMaxX {
 			if conn.TargetArea == "town" {
-				// Return to town
+				// Return to town. In MP, announce the move so clients follow.
+				if w.session != nil && w.session.Role() == netpkg.RoleHost {
+					w.session.BroadcastAreaChange("town", 9, 10)
+					w.switcher.SwitchScreen(NewTownScreenMP(w.switcher, w.player, w.session))
+					return
+				}
 				w.switcher.SwitchScreen(NewTownScreen(w.switcher, w.player))
 				return
 			}
-			// Transition to another wild area
+			// Transition to another wild area. In MP, broadcast first so
+			// clients enter the same area in their own syncSession pass.
+			if w.session != nil && w.session.Role() == netpkg.RoleHost {
+				sx, sy := areaStart(conn.TargetArea)
+				w.session.BroadcastAreaChange(conn.TargetArea, sx, sy)
+			}
 			w.nextArea = conn.TargetArea
 			w.fadeTick = 0
 			w.fadeDir = 1
@@ -416,8 +538,17 @@ func (w *WildScreen) giveChestLoot() {
 func (w *WildScreen) updateFlash() {
 	w.flashTick++
 	// Flash for ~30 ticks (0.5 seconds), then transition to combat
-	// Pass current tile position so the player returns here after combat
+	// Pass current tile position so the player returns here after combat.
+	// In multiplayer, use the session-aware constructor so every peer
+	// gets pulled into co-op combat.
 	if w.flashTick >= 30 {
+		if w.session != nil {
+			w.switcher.SwitchScreen(NewCombatScreenCoop(
+				w.switcher, w.player, w.encounterMon, w.area.MapKey,
+				w.tileX, w.tileY, w.session,
+			))
+			return
+		}
 		w.switcher.SwitchScreen(NewCombatScreenAt(
 			w.switcher, w.player, w.encounterMon, w.area.MapKey,
 			w.tileX, w.tileY,
@@ -487,6 +618,10 @@ func (w *WildScreen) Draw(screen *ebiten.Image) {
 	// Draw ground
 	w.tileMap.Draw(screen, w.camera.X, w.camera.Y)
 
+	// Draw remote co-op party members first so the local sprite renders
+	// on top if they overlap. No-op in single-player.
+	w.drawRemotePlayers(screen)
+
 	// Draw player
 	w.drawPlayer(screen)
 
@@ -526,6 +661,34 @@ func (w *WildScreen) drawPlayer(screen *ebiten.Image) {
 	sx := w.pixelX - float64(w.camera.X)
 	sy := w.pixelY - float64(w.camera.Y)
 	sheet.DrawFrame(screen, frame, sx, sy)
+}
+
+// drawRemotePlayers renders every other party member currently in this
+// wild area, with a small name tag above their head.
+func (w *WildScreen) drawRemotePlayers(screen *ebiten.Image) {
+	if w.session == nil {
+		return
+	}
+	for _, rp := range w.session.RemotePlayers(w.area.MapKey) {
+		sheet, ok := w.charSprites[rp.Class]
+		if !ok {
+			continue
+		}
+		sx := float64(rp.TileX*render.TileSize) - float64(w.camera.X)
+		sy := float64(rp.TileY*render.TileSize) - float64(w.camera.Y)
+		if sx < -16 || sx > 160 || sy < -16 || sy > 144 {
+			continue
+		}
+		sheet.DrawFrame(screen, 0, sx, sy)
+		label := rp.Name
+		if len(label) > 10 {
+			label = label[:10]
+		}
+		render.DrawText(screen, label,
+			int(sx)+8-render.TextWidth(label)/2,
+			int(sy)-8,
+			render.ColorMint)
+	}
 }
 
 func (w *WildScreen) drawFlash(screen *ebiten.Image) {

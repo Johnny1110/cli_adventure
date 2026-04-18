@@ -243,14 +243,17 @@ func (t *TownScreen) updateWalking() {
 	if t.tileY >= data.TownExitY {
 		// In multiplayer, the host is the one who changes area. Remote
 		// clients will automatically be pulled along by the host's
-		// area_change broadcast (see net/client.go).
-		if t.session != nil && t.session.Role() == netpkg.RoleHost {
-			t.session.BroadcastAreaChange("forest", 10, 2)
-		}
+		// area_change broadcast (see net/client.go + wild/town syncSession).
 		if t.session != nil && t.session.Role() == netpkg.RoleClient {
 			// Clients don't initiate — roll back onto the exit tile.
 			t.tileY = data.TownExitY - 1
 			t.pixelY = float64(t.tileY * render.TileSize)
+			return
+		}
+		if t.session != nil && t.session.Role() == netpkg.RoleHost {
+			sx, sy := areaStart("forest")
+			t.session.BroadcastAreaChange("forest", sx, sy)
+			t.switcher.SwitchScreen(NewWildScreenMP(t.switcher, t.player, "forest", t.session))
 			return
 		}
 		t.switcher.SwitchScreen(NewWildScreen(t.switcher, t.player, "forest"))
@@ -613,7 +616,7 @@ func (t *TownScreen) syncSession() {
 			}
 		case "area_change":
 			if t.session.Role() == netpkg.RoleClient && ev.Area != "" && ev.Area != "town" {
-				t.switcher.SwitchScreen(NewWildScreen(t.switcher, t.player, ev.Area))
+				t.switcher.SwitchScreen(NewWildScreenMP(t.switcher, t.player, ev.Area, t.session))
 			}
 		}
 	}

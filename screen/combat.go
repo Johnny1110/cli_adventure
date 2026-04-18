@@ -492,9 +492,13 @@ func (c *CombatScreen) returnAfterVictory() {
 	if c.monster.IsBoss {
 		// Boss defeated — show the ending!
 		c.switcher.SwitchScreen(NewEndingScreen(c.switcher, c.player))
-	} else {
-		c.switcher.SwitchScreen(NewWildScreenAt(c.switcher, c.player, c.areaKey, c.returnX, c.returnY))
+		return
 	}
+	if c.session != nil {
+		c.switcher.SwitchScreen(NewWildScreenMPAt(c.switcher, c.player, c.areaKey, c.returnX, c.returnY, c.session))
+		return
+	}
+	c.switcher.SwitchScreen(NewWildScreenAt(c.switcher, c.player, c.areaKey, c.returnX, c.returnY))
 }
 
 // syncCombatToSession is the per-tick multiplayer mirror. It's a no-op
@@ -523,6 +527,10 @@ func (c *CombatScreen) syncCombatToSession() {
 
 // returnToWild creates a WildScreen at the player's pre-combat position.
 func (c *CombatScreen) returnToWild() {
+	if c.session != nil {
+		c.switcher.SwitchScreen(NewWildScreenMPAt(c.switcher, c.player, c.areaKey, c.returnX, c.returnY, c.session))
+		return
+	}
 	c.switcher.SwitchScreen(NewWildScreenAt(c.switcher, c.player, c.areaKey, c.returnX, c.returnY))
 }
 
