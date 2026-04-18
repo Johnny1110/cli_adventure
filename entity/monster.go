@@ -15,6 +15,7 @@ type Monster struct {
 	ATK        int
 	DEF        int
 	SPD        int
+	CRITRATE   int // critical dmg rate
 	XPReward   int
 	CoinReward int
 	IsBoss     bool
@@ -38,8 +39,9 @@ func (m *Monster) MakeGolden() {
 	m.Name = "Golden " + m.Name
 	m.MaxHP = m.MaxHP * 3 / 2
 	m.HP = m.MaxHP
-	m.ATK = m.ATK + 2
-	m.DEF = m.DEF + 2
+	m.ATK = m.ATK * 2
+	m.DEF = m.DEF * 2
 	m.XPReward *= 3
 	m.CoinReward *= 3
+	m.CRITRATE = 50
 }

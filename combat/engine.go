@@ -33,15 +33,15 @@ import (
 type Phase int
 
 const (
-	PhaseStart       Phase = iota
-	PhasePlayerTurn        // waiting for player to pick an action
-	PhasePlayerAct         // player's action is resolving
-	PhaseEnemyTurn         // enemy is about to act
-	PhaseEnemyAct          // enemy's action is resolving
-	PhaseVictory           // monster HP <= 0
-	PhaseDefeat            // player HP <= 0
-	PhaseFlee              // player successfully fled
-	PhaseFleeFaild         // flee failed, enemy gets a free turn
+	PhaseStart      Phase = iota
+	PhasePlayerTurn       // waiting for player to pick an action
+	PhasePlayerAct        // player's action is resolving
+	PhaseEnemyTurn        // enemy is about to act
+	PhaseEnemyAct         // enemy's action is resolving
+	PhaseVictory          // monster HP <= 0
+	PhaseDefeat           // player HP <= 0
+	PhaseFlee             // player successfully fled
+	PhaseFleeFaild        // flee failed, enemy gets a free turn
 )
 
 // Action represents a combat action the player can take.
@@ -58,11 +58,11 @@ const (
 
 // Result holds the outcome of a single action for the screen to animate.
 type Result struct {
-	Action    Action
-	Damage    int
-	IsCrit    bool
-	Healed    int
-	Message   string
+	Action         Action
+	Damage         int
+	IsCrit         bool
+	Healed         int
+	Message        string
 	TargetIsPlayer bool // true if the player took damage
 }
 
@@ -71,9 +71,9 @@ type Engine struct {
 	Player  *entity.Player
 	Monster *entity.Monster
 
-	Phase    Phase
-	Round    int
-	Results  []Result // results to animate this phase
+	Phase   Phase
+	Round   int
+	Results []Result // results to animate this phase
 
 	// State flags
 	PlayerDefending bool
@@ -368,9 +368,13 @@ func (e *Engine) calcShieldBash() Result {
 	atk := float64(e.playerATK()) * 0.8
 	def := float64(e.enemyDEF())
 	base := atk - def/2.0
-	if base < 1 { base = 1 }
+	if base < 1 {
+		base = 1
+	}
 	damage := int(base * (0.9 + rand.Float64()*0.2))
-	if damage < 1 { damage = 1 }
+	if damage < 1 {
+		damage = 1
+	}
 
 	e.Monster.HP -= damage
 	AddEffect(&e.EnemyEffects, NewStatus("Stun", CondStun, 1))
@@ -393,7 +397,9 @@ func (e *Engine) calcFireball() Result {
 	atk := float64(e.playerATK()) * 2.0
 	def := float64(e.enemyDEF())
 	base := atk - def/4.0
-	if base < 2 { base = 2 }
+	if base < 2 {
+		base = 2
+	}
 	damage := int(base * (0.9 + rand.Float64()*0.2))
 
 	e.Monster.HP -= damage
@@ -415,7 +421,9 @@ func (e *Engine) calcSnipe() Result {
 	atk := float64(e.playerATK())
 	def := float64(e.enemyDEF())
 	base := atk - def/2.0
-	if base < 1 { base = 1 }
+	if base < 1 {
+		base = 1
+	}
 	damage := int(base * (0.9 + rand.Float64()*0.2))
 	damage = damage * 2 // guaranteed double damage crit
 
@@ -439,9 +447,13 @@ func (e *Engine) calcGenericMagic() Result {
 	atk := float64(e.playerATK()) * 1.5
 	def := float64(e.enemyDEF())
 	base := atk - def/4.0
-	if base < 1 { base = 1 }
+	if base < 1 {
+		base = 1
+	}
 	damage := int(base * (0.9 + rand.Float64()*0.2))
-	if damage < 1 { damage = 1 }
+	if damage < 1 {
+		damage = 1
+	}
 
 	e.Monster.HP -= damage
 	return Result{Action: ActionMagic, Damage: damage, Message: "Magic blast!"}
@@ -617,7 +629,9 @@ func (e *Engine) skillHolyStrike(mult float64) Result {
 	e.Monster.HP -= damage
 	// Lifesteal: heal 50% of damage dealt
 	heal := damage / 2
-	if heal < 1 { heal = 1 }
+	if heal < 1 {
+		heal = 1
+	}
 	e.Player.Stats.HP += heal
 	if e.Player.Stats.HP > e.Player.Stats.MaxHP {
 		e.Player.Stats.HP = e.Player.Stats.MaxHP
@@ -651,7 +665,9 @@ func (e *Engine) skillThunder(mult float64) Result {
 	// Ignores DEF entirely
 	atk := float64(e.playerATK()) * mult
 	damage := int(atk * (0.9 + rand.Float64()*0.2))
-	if damage < 1 { damage = 1 }
+	if damage < 1 {
+		damage = 1
+	}
 	e.Monster.HP -= damage
 	return Result{Action: ActionSkill, Damage: damage, Message: "Thunder!\nIgnores defense!"}
 }
@@ -695,9 +711,13 @@ func (e *Engine) calcDamage(mult, defDiv float64) int {
 	atk := float64(e.playerATK()) * mult
 	def := float64(e.enemyDEF())
 	base := atk - def/defDiv
-	if base < 1 { base = 1 }
+	if base < 1 {
+		base = 1
+	}
 	damage := int(base * (0.9 + rand.Float64()*0.2))
-	if damage < 1 { damage = 1 }
+	if damage < 1 {
+		damage = 1
+	}
 	return damage
 }
 
@@ -706,23 +726,33 @@ func (e *Engine) calcMagicDamage(mult, defDiv float64) int {
 	atk := float64(e.playerATK()) * mult
 	def := float64(e.enemyDEF())
 	base := atk - def/defDiv
-	if base < 2 { base = 2 }
+	if base < 2 {
+		base = 2
+	}
 	damage := int(base * (0.9 + rand.Float64()*0.2))
-	if damage < 1 { damage = 1 }
+	if damage < 1 {
+		damage = 1
+	}
 	return damage
 }
 
 // itoa is a tiny int-to-string helper within the combat package.
 func itoa(n int) string {
-	if n == 0 { return "0" }
+	if n == 0 {
+		return "0"
+	}
 	neg := n < 0
-	if neg { n = -n }
+	if neg {
+		n = -n
+	}
 	digits := make([]byte, 0, 10)
 	for n > 0 {
 		digits = append(digits, byte('0'+n%10))
 		n /= 10
 	}
-	if neg { digits = append(digits, '-') }
+	if neg {
+		digits = append(digits, '-')
+	}
 	// reverse
 	for i, j := 0, len(digits)-1; i < j; i, j = i+1, j-1 {
 		digits[i], digits[j] = digits[j], digits[i]
@@ -739,6 +769,21 @@ func (e *Engine) calcEnemyAttack() Result {
 				TargetIsPlayer: true,
 				Message:        e.Monster.Name + " missed!\n(Blinded)",
 			}
+		}
+	}
+
+	// user speed can doge atk.
+	spd := e.Player.Stats.SPD // int
+	// dodgedRate = spd / 2 * 1.0
+	dodgedRate := spd / 2
+	if dodgedRate >= 70 {
+		dodgedRate = 70
+	}
+	if rand.Intn(100) <= dodgedRate {
+		return Result{
+			Action:         ActionAttack,
+			TargetIsPlayer: true,
+			Message:        e.Monster.Name + " missed!\n(Dodged)",
 		}
 	}
 
@@ -764,7 +809,14 @@ func (e *Engine) calcEnemyAttack() Result {
 		def *= 2 // defending doubles DEF
 	}
 
-	base := atk - def/2.0
+	monsterCriticalDmgRate := e.Monster.CRITRATE
+	critFlag := false
+	if rand.Intn(100) <= monsterCriticalDmgRate {
+		critFlag = true
+		atk *= 2.0
+	}
+
+	base := atk - def/4.0
 	if base < 1 {
 		base = 1
 	}
@@ -776,9 +828,14 @@ func (e *Engine) calcEnemyAttack() Result {
 
 	// Aegis: halves damage from next hit (consumed)
 	msg := e.Monster.Name + " attacks!"
+	if critFlag {
+		msg += " (Critical hit)"
+	}
 	if ConsumeCondition(&e.PlayerEffects, CondAegis) {
 		damage = damage / 2
-		if damage < 1 { damage = 1 }
+		if damage < 1 {
+			damage = 1
+		}
 		msg = e.Monster.Name + " attacks!\nAegis absorbs half!"
 	}
 
@@ -848,14 +905,20 @@ func (e *Engine) calcEnemyDamage(mult float64) int {
 		def *= 2
 	}
 	base := atk - def/2.0
-	if base < 1 { base = 1 }
+	if base < 1 {
+		base = 1
+	}
 	damage := int(base * (0.9 + rand.Float64()*0.2))
-	if damage < 1 { damage = 1 }
+	if damage < 1 {
+		damage = 1
+	}
 
 	// Aegis check
 	if ConsumeCondition(&e.PlayerEffects, CondAegis) {
 		damage = damage / 2
-		if damage < 1 { damage = 1 }
+		if damage < 1 {
+			damage = 1
+		}
 	}
 	return damage
 }
@@ -884,7 +947,9 @@ func (e *Engine) calcBossSpecial() Result {
 	// Aegis still blocks half
 	if ConsumeCondition(&e.PlayerEffects, CondAegis) {
 		damage = damage / 2
-		if damage < 1 { damage = 1 }
+		if damage < 1 {
+			damage = 1
+		}
 		msg += "\nAegis absorbs half!"
 	}
 
@@ -915,14 +980,18 @@ func (e *Engine) calcBossDebuff() Result {
 		def *= 2
 	}
 	base := atk - def/3.0
-	if base < 1 { base = 1 }
+	if base < 1 {
+		base = 1
+	}
 	damage := int(base * (0.9 + rand.Float64()*0.2))
 
 	// Aegis check
 	msg := e.Monster.Name + " roars!"
 	if ConsumeCondition(&e.PlayerEffects, CondAegis) {
 		damage = damage / 2
-		if damage < 1 { damage = 1 }
+		if damage < 1 {
+			damage = 1
+		}
 		msg += "\nAegis absorbs half!"
 	}
 

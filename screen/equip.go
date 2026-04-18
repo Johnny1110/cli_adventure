@@ -4,9 +4,9 @@
 // In RPGs, the equipment screen is where players "feel" their progression.
 // Seeing your ATK go from 8 to 14 because you equipped a Steel Sword is deeply
 // satisfying — it's the numeric proof that grinding paid off. This screen shows:
-//   1. Currently equipped weapon and armor with their stat bonuses
-//   2. Total stats (base + equipment) with color-coded additions
-//   3. Class identity and level
+//  1. Currently equipped weapon and armor with their stat bonuses
+//  2. Total stats (base + equipment) with color-coded additions
+//  3. Class identity and level
 //
 // The layout is inspired by classic Game Boy RPG menus: compact, text-heavy,
 // using color to distinguish base stats from equipment bonuses. The "E" key

@@ -1,5 +1,7 @@
 package entity
 
+import "fmt"
+
 // ItemType categorizes items for equip logic and UI display.
 //
 // THEORY — Six-slot equipment model (Final Fantasy / Diablo):
@@ -11,13 +13,13 @@ package entity
 type ItemType int
 
 const (
-	ItemWeapon    ItemType = iota // ATK bonus
-	ItemArmor                    // DEF bonus (body)
-	ItemHelmet                   // DEF bonus (head)
-	ItemBoots                    // DEF bonus (feet), some give SPD
-	ItemShield                   // DEF bonus (off-hand)
-	ItemAccessory                // misc bonus (ring/amulet — HP, ATK, DEF, or SPD)
-	ItemConsumable               // single-use (potions, ethers)
+	ItemWeapon     ItemType = iota // ATK bonus
+	ItemArmor                      // DEF bonus (body)
+	ItemHelmet                     // DEF bonus (head)
+	ItemBoots                      // DEF bonus (feet), some give SPD
+	ItemShield                     // DEF bonus (off-hand)
+	ItemAccessory                  // misc bonus (ring/amulet — HP, ATK, DEF, or SPD)
+	ItemConsumable                 // single-use (potions, ethers)
 )
 
 // ConsumableType distinguishes what stat a consumable restores.
@@ -31,12 +33,12 @@ const (
 type ConsumableType int
 
 const (
-	ConsumeHP      ConsumableType = iota // restores HP (Potion, Hi Potion, Elixir)
-	ConsumeMP                            // restores MP (Ether, Hi Ether)
-	ConsumeAntidote                      // cures Poison/Burn/Bleed DoTs
-	ConsumeSmoke                         // guaranteed flee from non-boss combat
-	ConsumeATKBuff                       // grants temporary ATK boost in combat
-	ConsumeDEFBuff                       // grants temporary DEF boost in combat
+	ConsumeHP       ConsumableType = iota // restores HP (Potion, Hi Potion, Elixir)
+	ConsumeMP                             // restores MP (Ether, Hi Ether)
+	ConsumeAntidote                       // cures Poison/Burn/Bleed DoTs
+	ConsumeSmoke                          // guaranteed flee from non-boss combat
+	ConsumeATKBuff                        // grants temporary ATK boost in combat
+	ConsumeDEFBuff                        // grants temporary DEF boost in combat
 )
 
 // Rarity represents the quality tier of an item. Higher rarity means better
@@ -48,11 +50,11 @@ const (
 // This creates excitement at every loot drop — even familiar items can roll
 // high rarity. The 5-color spectrum is universally recognized by RPG players:
 //
-//   Common (white):     1.0× stats, no bonus  — baseline
-//   Uncommon (green):   1.15× stats, +small bonus  — "nice find"
-//   Rare (blue):        1.3× stats, +medium bonus  — "this is good!"
-//   Epic (purple):      1.5× stats, +large bonus  — "whoa, keep this!"
-//   Legendary (gold):   1.8× stats, +huge bonus  — "once in a lifetime"
+//	Common (white):     1.0× stats, no bonus  — baseline
+//	Uncommon (green):   1.15× stats, +small bonus  — "nice find"
+//	Rare (blue):        1.3× stats, +medium bonus  — "this is good!"
+//	Epic (purple):      1.5× stats, +large bonus  — "whoa, keep this!"
+//	Legendary (gold):   1.8× stats, +huge bonus  — "once in a lifetime"
 //
 // The multipliers compound with reinforcement (+5% per level), so a
 // Legendary +3 item is dramatically stronger than a Common +3.
@@ -161,6 +163,10 @@ type Item struct {
 	EnhanceLevel  int // reinforcement level (+0, +1, +2, ...)
 }
 
+func (i *Item) String() string {
+	return fmt.Sprintf("%s(%s)", i.DisplayName(), i.Rarity)
+}
+
 // BonusStatType identifies which stat an item's BonusStat applies to.
 type BonusStatType int
 
@@ -196,8 +202,8 @@ func (it *Item) MeetsLevelReq(playerLevel int) bool {
 // Rarity and reinforcement multiply together, creating a power curve where
 // a Legendary +3 item is dramatically stronger than a Common +3:
 //
-//   Common  base 10 +3 → 10 × 1.0 × 1.157 = 11
-//   Legend. base 10 +3 → 10 × 1.8 × 1.157 = 20
+//	Common  base 10 +3 → 10 × 1.0 × 1.157 = 11
+//	Legend. base 10 +3 → 10 × 1.8 × 1.157 = 20
 //
 // This multiplicative relationship makes both rarity AND reinforcement
 // feel impactful. Neither one alone defines the item's power — you want
@@ -250,10 +256,11 @@ func (it *Item) DisplayName() string {
 // THEORY — Rolling price model:
 // Each reinforcement costs 5× the item's current "effective price", and
 // the cost becomes the new effective price. For a 40G sword:
-//   +0→+1:  40×5   =   200G  (effective price is now 200G)
-//   +1→+2: 200×5   =  1000G  (effective price is now 1000G)
-//   +2→+3: 1000×5  =  5000G
-//   +3→+4: 5000×5  = 25000G
+//
+//	+0→+1:  40×5   =   200G  (effective price is now 200G)
+//	+1→+2: 200×5   =  1000G  (effective price is now 1000G)
+//	+2→+3: 1000×5  =  5000G
+//	+3→+4: 5000×5  = 25000G
 //
 // Compared to the old price^(level+1) formula, this is far gentler:
 // the old model charged 64000G for +3 on a 40G sword, the new model
@@ -280,11 +287,13 @@ func (it *Item) ReinforceCost() int {
 // multiplies by 0.85 for each subsequent level.
 //
 // THEORY — Decreasing success rate as risk/reward:
-//   +0→+1: 100%  (guaranteed first upgrade — hooks the player)
-//   +1→+2: 85%   (slight risk — "probably fine")
-//   +2→+3: 72%   (noticeable risk — "should I save first?")
-//   +5→+6: 44%   (coin flip territory — genuine tension)
-//   +9→+10: 20%  (heroic attempt — massive dopamine if it lands)
+//
+//	+0→+1: 100%  (guaranteed first upgrade — hooks the player)
+//	+1→+2: 85%   (slight risk — "probably fine")
+//	+2→+3: 72%   (noticeable risk — "should I save first?")
+//	+5→+6: 44%   (coin flip territory — genuine tension)
+//	+9→+10: 20%  (heroic attempt — massive dopamine if it lands)
+//
 // This curve is borrowed from Korean MMOs where the decreasing odds
 // make each successful high-level reinforce a genuine achievement.
 func (it *Item) ReinforceSuccessRate() float64 {
