@@ -88,8 +88,9 @@ type WildScreen struct {
 	//   - Client never triggers encounters or area changes; it follows the
 	//     host via area_change / combat_start session events.
 	//   - Host broadcasts area transitions before switching screens so the
-	//     client can follow. Host uses NewCombatScreenCoop to keep battles
-	//     mirrored.
+	//     client can follow. Encounters switch to CombatMPScreen on every
+	//     peer (including the host), which runs a host-authoritative
+	//     simultaneous-decision round machine (see net/combat_round.go).
 	session *netpkg.Session
 }
 
@@ -248,11 +249,14 @@ func (w *WildScreen) syncSession() {
 	for _, ev := range w.session.PopEvents() {
 		switch ev.Kind {
 		case "combat_start":
-			// Only the client should auto-switch; the host opens combat
-			// through its own flow (triggerEncounter → NewCombatScreenCoop)
-			// and has already switched screens by the time this fires.
+			// Only the client should auto-switch; the host opened combat
+			// itself in updateFlash() and has already switched by the time
+			// this fires. Clients transition to the shared MP combat view.
 			if w.session.Role() == netpkg.RoleClient {
-				w.switcher.SwitchScreen(NewCombatCoopScreen(w.switcher, w.player, w.session, w))
+				w.switcher.SwitchScreen(NewCombatMPScreen(
+					w.switcher, w.player, w.session,
+					w.area.MapKey, w.tileX, w.tileY,
+				))
 			}
 		case "area_change":
 			if w.session.Role() != netpkg.RoleClient {
@@ -537,15 +541,39 @@ func (w *WildScreen) giveChestLoot() {
 
 func (w *WildScreen) updateFlash() {
 	w.flashTick++
-	// Flash for ~30 ticks (0.5 seconds), then transition to combat
-	// Pass current tile position so the player returns here after combat.
-	// In multiplayer, use the session-aware constructor so every peer
-	// gets pulled into co-op combat.
+	// Flash for ~30 ticks (0.5 seconds), then transition to combat.
+	// Multiplayer path (host only — the host is the one who rolled the
+	// encounter; clients follow via the combat_start event).
 	if w.flashTick >= 30 {
+		if w.session != nil && w.session.Role() == netpkg.RoleHost {
+			// Open a team-play fight on the host's round machine.
+			mon := w.encounterMon
+			w.session.StartTeamCombat(netpkg.MonsterInit{
+				ID:         mon.SpriteID,
+				Name:       mon.Name,
+				SpriteID:   mon.SpriteID,
+				HP:         mon.HP,
+				MaxHP:      mon.MaxHP,
+				ATK:        mon.ATK,
+				DEF:        mon.DEF,
+				SPD:        mon.SPD,
+				IsBoss:     mon.IsBoss,
+				XPReward:   mon.XPReward,
+				CoinReward: mon.CoinReward,
+			}, playerCombatStats(w.player))
+			w.switcher.SwitchScreen(NewCombatMPScreen(
+				w.switcher, w.player, w.session,
+				w.area.MapKey, w.tileX, w.tileY,
+			))
+			return
+		}
 		if w.session != nil {
-			w.switcher.SwitchScreen(NewCombatScreenCoop(
-				w.switcher, w.player, w.encounterMon, w.area.MapKey,
-				w.tileX, w.tileY, w.session,
+			// Client-side: the host will broadcast combat_start. We just
+			// switch ourselves to the MP combat screen now — the shared
+			// state will populate from the first MsgCombatState.
+			w.switcher.SwitchScreen(NewCombatMPScreen(
+				w.switcher, w.player, w.session,
+				w.area.MapKey, w.tileX, w.tileY,
 			))
 			return
 		}

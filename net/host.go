@@ -35,14 +35,34 @@ type Host struct {
 	nextID    uint64
 
 	// monster / combat authoritative state
-	monsterID   string
-	monsterName string
-	monsterHP   int
-	monsterMax  int
-	combatOpen  bool
+	monsterID       string
+	monsterName     string
+	monsterSpriteID string
+	monsterHP       int
+	monsterMax      int
+	monsterATK      int
+	monsterDEF      int
+	monsterSPD      int
+	monsterIsBoss   bool
+	combatOpen      bool
 
 	// action queue: PeerID → their committed turn action
 	pendingActions map[string]CombatActionMsg
+
+	// team-play round state machine (nil when no MP combat is running)
+	round *roundMachine
+
+	// host's own combat snapshot (mirrors the host player's live stats).
+	// Updated via setHostCombatStats whenever the host player takes damage.
+	hostSelf   CombatPlayerStats
+	hostAction CombatActionKind
+	hostReady  bool
+	hostFled   bool
+
+	// rewards stashed by startTeamCombat and consumed by the round machine
+	// when it closes out a victorious fight.
+	rewardXP    int
+	rewardCoins int
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -69,15 +89,36 @@ type hostPeer struct {
 	area   string
 
 	// per-peer combat state (HP/MP mirrored from the local player struct
-	// in a fuller implementation; we keep enough here to show in HUD)
-	mp     int
-	maxMP  int
-	ready  bool
+	// in a fuller implementation; we keep enough here to show in HUD).
+	mp    int
+	maxMP int
+	atk   int
+	def   int
+	spd   int
+	level int
+	ready bool
+
+	// Team-play round state
+	action  CombatActionKind // locked-in action for the current round
+	hasAction bool
+	fled    bool
 }
 
 // StartHost binds a TCP listener on an ephemeral port and begins the LAN
 // beacon. Returns a Session the game can plug into its screens.
 func StartHost(roomName, hostName string, hostClass int) (*Session, error) {
+	return StartHostWithStats(roomName, CombatPlayerStats{
+		Name:  hostName,
+		Class: hostClass,
+		HP:    30, MaxHP: 30,
+		ATK: 6, DEF: 4, SPD: 4, Level: 1,
+	})
+}
+
+// StartHostWithStats is the full-fidelity variant used by the game — it
+// carries the host player's current combat stats so MP fights resolve
+// against the host's real numbers rather than class-base defaults.
+func StartHostWithStats(roomName string, hostStats CombatPlayerStats) (*Session, error) {
 	// Port 0 → OS-assigned ephemeral port.
 	ln, err := stdnet.Listen("tcp4", ":0")
 	if err != nil {
@@ -86,18 +127,18 @@ func StartHost(roomName, hostName string, hostClass int) (*Session, error) {
 	_, portStr, _ := stdnet.SplitHostPort(ln.Addr().String())
 	port, _ := strconv.Atoi(portStr)
 
-	beacon, err := StartBeacon(roomName, hostName, port, MaxPeers)
+	beacon, err := StartBeacon(roomName, hostStats.Name, port, MaxPeers)
 	if err != nil {
 		_ = ln.Close()
 		return nil, err
 	}
 
-	sess := newSession(RoleHost, "host", hostName)
+	sess := newSession(RoleHost, "host", hostStats.Name)
 	// Seed the session with the host's own presence so the town screen can
 	// show the host on the map straight away.
 	sess.setRemotePeer(RemotePlayer{
-		PeerID: "host", Name: hostName, Class: hostClass,
-		TileX: 9, TileY: 10, HP: 30, MaxHP: 30, Area: "town",
+		PeerID: "host", Name: hostStats.Name, Class: hostStats.Class,
+		TileX: 9, TileY: 10, HP: hostStats.HP, MaxHP: hostStats.MaxHP, Area: "town",
 	})
 
 	h := &Host{
@@ -111,6 +152,7 @@ func StartHost(roomName, hostName string, hostClass int) (*Session, error) {
 		hostArea:       "town",
 		hostTileX:      9,
 		hostTileY:      10,
+		hostSelf:       hostStats,
 	}
 	sess.host = h
 
@@ -184,6 +226,40 @@ func (h *Host) handleNewPeer(conn stdnet.Conn) {
 	}
 	h.nextID++
 	peerID := fmt.Sprintf("p%d", h.nextID)
+	// Seed stats from the Hello payload; fall back to conservative
+	// defaults if the peer is an older client that didn't send them.
+	maxHP := hello.MaxHP
+	if maxHP <= 0 {
+		maxHP = 30
+	}
+	hp := hello.HP
+	if hp <= 0 {
+		hp = maxHP
+	}
+	maxMP := hello.MaxMP
+	if maxMP < 0 {
+		maxMP = 0
+	}
+	mp := hello.MP
+	if mp < 0 {
+		mp = 0
+	}
+	atk := hello.ATK
+	if atk <= 0 {
+		atk = 6
+	}
+	def := hello.DEF
+	if def <= 0 {
+		def = 4
+	}
+	spd := hello.SPD
+	if spd <= 0 {
+		spd = 4
+	}
+	lvl := hello.Level
+	if lvl <= 0 {
+		lvl = 1
+	}
 	p := &hostPeer{
 		id:     peerID,
 		name:   hello.Name,
@@ -192,8 +268,15 @@ func (h *Host) handleNewPeer(conn stdnet.Conn) {
 		sendCh: make(chan []byte, 64),
 		tileX:  h.hostTileX,
 		tileY:  h.hostTileY,
-		hp:     30, maxHP: 30,
-		area: h.hostArea,
+		hp:     hp,
+		maxHP:  maxHP,
+		mp:     mp,
+		maxMP:  maxMP,
+		atk:    atk,
+		def:    def,
+		spd:    spd,
+		level:  lvl,
+		area:   h.hostArea,
 	}
 	p.alive.Store(true)
 	h.peers[peerID] = p
@@ -339,12 +422,18 @@ func (h *Host) applyPeerInput(p *hostPeer, in InputMsg) {
 }
 
 // applyCombatAction records a peer's committed turn action.
-// Combat resolution itself lives in combat/engine.go and is driven by the
-// host's combat screen tick — here we just stash the intent.
+// In the legacy co-op model this is consumed by the host's local combat
+// screen via ConsumePendingActions. In team-play (round machine active)
+// we additionally store the action on the peer so the resolver can read it.
 func (h *Host) applyCombatAction(peerID string, a CombatActionMsg) {
 	h.mu.Lock()
 	h.pendingActions[peerID] = a
-	if p, ok := h.peers[peerID]; ok {
+	if peerID == "host" {
+		h.hostAction = a.Kind
+		h.hostReady = true
+	} else if p, ok := h.peers[peerID]; ok {
+		p.action = a.Kind
+		p.hasAction = true
 		p.ready = true
 	}
 	h.mu.Unlock()
@@ -359,6 +448,123 @@ func (h *Host) ConsumePendingActions() map[string]CombatActionMsg {
 	h.pendingActions = map[string]CombatActionMsg{}
 	for _, p := range h.peers {
 		p.ready = false
+	}
+	return out
+}
+
+// startTeamCombat opens a team-play fight driven by the host's round machine.
+// The host's own combat stats come in via `host`; peer stats were captured on Hello.
+func (h *Host) startTeamCombat(mon MonsterInit, host CombatPlayerStats) {
+	h.mu.Lock()
+	h.monsterID = mon.ID
+	h.monsterName = mon.Name
+	h.monsterSpriteID = mon.SpriteID
+	h.monsterHP = mon.HP
+	h.monsterMax = mon.MaxHP
+	h.monsterATK = mon.ATK
+	h.monsterDEF = mon.DEF
+	h.monsterSPD = mon.SPD
+	h.monsterIsBoss = mon.IsBoss
+	h.combatOpen = true
+	h.pendingActions = map[string]CombatActionMsg{}
+
+	h.hostSelf = host
+	h.hostAction = ""
+	h.hostReady = false
+	h.hostFled = false
+	h.rewardXP = mon.XPReward
+	h.rewardCoins = mon.CoinReward
+	for _, p := range h.peers {
+		p.hasAction = false
+		p.ready = false
+		p.fled = false
+		p.action = ""
+	}
+
+	// Seed session state so screens can bind to it immediately.
+	players := h.buildCombatPlayersLocked()
+	h.mu.Unlock()
+
+	h.session.setCombat(CombatSharedState{
+		Active:          true,
+		MonsterID:       mon.ID,
+		MonsterName:     mon.Name,
+		MonsterSpriteID: mon.SpriteID,
+		MonsterHP:       mon.HP,
+		MonsterMax:      mon.MaxHP,
+		MonsterATK:      mon.ATK,
+		MonsterDEF:      mon.DEF,
+		MonsterSPD:      mon.SPD,
+		MonsterIsBoss:   mon.IsBoss,
+		Players:         players,
+		Phase:           RoundPhaseCollect,
+		SecondsLeft:     roundCollectSeconds,
+		RoundNum:        1,
+	})
+
+	h.session.pushEvent(SessionEvent{Kind: "combat_start", Text: mon.Name})
+	h.broadcast(MsgCombatStart, CombatStartMsg{
+		MonsterID:       mon.ID,
+		MonsterName:     mon.Name,
+		MonsterSpriteID: mon.SpriteID,
+		MonsterHP:       mon.HP,
+		MonsterMax:      mon.MaxHP,
+		MonsterATK:      mon.ATK,
+		MonsterDEF:      mon.DEF,
+		MonsterSPD:      mon.SPD,
+		IsBoss:          mon.IsBoss,
+	})
+
+	// Kick off the round machine.
+	h.round = newRoundMachine(h)
+}
+
+// SetHostCombatHP is used by the host's local combat screen to push the host
+// player's latest HP/MP into the authoritative state between rounds.
+func (h *Host) SetHostCombatHP(hp, mp int) {
+	h.mu.Lock()
+	h.hostSelf.HP = hp
+	h.hostSelf.MP = mp
+	h.mu.Unlock()
+}
+
+// SubmitHostAction commits the host's own choice for the current round.
+func (h *Host) SubmitHostAction(a CombatActionKind) {
+	h.mu.Lock()
+	h.hostAction = a
+	h.hostReady = true
+	h.mu.Unlock()
+}
+
+// buildCombatPlayersLocked returns a snapshot of all combat players.
+// CALLER MUST hold h.mu.
+func (h *Host) buildCombatPlayersLocked() []CombatPlayer {
+	out := make([]CombatPlayer, 0, len(h.peers)+1)
+	out = append(out, CombatPlayer{
+		PeerID: "host",
+		Name:   h.hostSelf.Name,
+		Class:  h.hostSelf.Class,
+		HP:     h.hostSelf.HP,
+		MaxHP:  h.hostSelf.MaxHP,
+		MP:     h.hostSelf.MP,
+		MaxMP:  h.hostSelf.MaxMP,
+		Ready:  h.hostReady,
+		Action: string(h.hostAction),
+		Fled:   h.hostFled,
+	})
+	for _, p := range h.peers {
+		out = append(out, CombatPlayer{
+			PeerID: p.id,
+			Name:   p.name,
+			Class:  p.class,
+			HP:     p.hp,
+			MaxHP:  p.maxHP,
+			MP:     p.mp,
+			MaxMP:  p.maxMP,
+			Ready:  p.ready,
+			Action: string(p.action),
+			Fled:   p.fled,
+		})
 	}
 	return out
 }
@@ -388,9 +594,11 @@ func (h *Host) startCombat(monID, monName string, hp, maxHP int) {
 func (h *Host) endCombat(victory bool, xp, coins int) {
 	h.mu.Lock()
 	h.combatOpen = false
+	h.round = nil
 	h.mu.Unlock()
 	cs := h.session.CombatState()
 	cs.Active = false
+	cs.Phase = RoundPhaseEnded
 	cs.EndVictory = victory
 	cs.EndXP = xp
 	cs.EndCoins = coins
@@ -454,6 +662,11 @@ func (h *Host) broadcastLoop() {
 			h.broadcast(MsgState, msg)
 
 			if h.combatOpen {
+				// Advance the team-play round state machine (if any) and
+				// then push the resulting combat snapshot.
+				if h.round != nil {
+					h.round.tick(tick)
+				}
 				h.broadcast(MsgCombatState, h.combatSnapshot(tick))
 			}
 		}
@@ -489,8 +702,14 @@ func (h *Host) combatSnapshot(tick uint64) CombatStateMsg {
 	snaps := make([]CombatSnapshot, 0, len(cs.Players))
 	for _, pl := range cs.Players {
 		snaps = append(snaps, CombatSnapshot{
-			PeerID: pl.PeerID, HP: pl.HP, MaxHP: pl.MaxHP,
-			MP: pl.MP, MaxMP: pl.MaxMP, Ready: pl.Ready,
+			PeerID: pl.PeerID,
+			Name:   pl.Name,
+			Class:  pl.Class,
+			HP:     pl.HP, MaxHP: pl.MaxHP,
+			MP: pl.MP, MaxMP: pl.MaxMP,
+			Ready:  pl.Ready,
+			Action: pl.Action,
+			Fled:   pl.Fled,
 		})
 	}
 	return CombatStateMsg{
@@ -500,6 +719,9 @@ func (h *Host) combatSnapshot(tick uint64) CombatStateMsg {
 		MonsterName: cs.MonsterName,
 		Players:     snaps,
 		LogLine:     cs.LastLog,
+		Phase:       cs.Phase,
+		SecondsLeft: cs.SecondsLeft,
+		RoundNum:    cs.RoundNum,
 	}
 }
 
@@ -566,6 +788,13 @@ func wireBytes(kind MsgType, payload any) ([]byte, error) {
 		return nil, err
 	}
 	return append(line, '\n'), nil
+}
+
+// buildCombatPlayers returns a fresh snapshot under its own lock.
+func (h *Host) buildCombatPlayers() []CombatPlayer {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.buildCombatPlayersLocked()
 }
 
 func sign(n int) int {

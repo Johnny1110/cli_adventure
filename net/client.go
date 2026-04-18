@@ -32,13 +32,37 @@ type Client struct {
 // and performs the Hello/Welcome handshake. Returns a Session the game
 // can plug in directly.
 func Dial(addr, playerName string, class int) (*Session, error) {
+	return DialWithStats(addr, CombatPlayerStats{
+		Name:  playerName,
+		Class: class,
+		HP:    30, MaxHP: 30,
+		ATK: 6, DEF: 4, SPD: 4, Level: 1,
+	})
+}
+
+// DialWithStats is the full-fidelity variant — Hello carries the player's
+// current stats so the host can resolve MP fights against real numbers.
+func DialWithStats(addr string, stats CombatPlayerStats) (*Session, error) {
 	// 3 s dial timeout — plenty for a LAN.
 	conn, err := stdnet.DialTimeout("tcp4", addr, 3*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("net: dial %s: %w", addr, err)
 	}
-	// Send Hello immediately.
-	if err := WriteMsg(conn, MsgHello, HelloMsg{Name: playerName, Class: class, Version: 1}); err != nil {
+	// Send Hello with the player's stats baked in.
+	hello := HelloMsg{
+		Name:    stats.Name,
+		Class:   stats.Class,
+		Version: 1,
+		Level:   stats.Level,
+		HP:      stats.HP,
+		MaxHP:   stats.MaxHP,
+		MP:      stats.MP,
+		MaxMP:   stats.MaxMP,
+		ATK:     stats.ATK,
+		DEF:     stats.DEF,
+		SPD:     stats.SPD,
+	}
+	if err := WriteMsg(conn, MsgHello, hello); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -62,7 +86,7 @@ func Dial(addr, playerName string, class int) (*Session, error) {
 	}
 	_ = conn.SetReadDeadline(time.Time{})
 
-	sess := newSession(RoleClient, welcome.YourPeerID, playerName)
+	sess := newSession(RoleClient, welcome.YourPeerID, stats.Name)
 	sess.setArea(welcome.Area)
 	for _, p := range welcome.Peers {
 		sess.setRemotePeer(RemotePlayer{
@@ -136,8 +160,18 @@ func (c *Client) readerLoop(scanner *bufio.Scanner) {
 			var cs CombatStartMsg
 			if err := DecodePayload(&env, MsgCombatStart, &cs); err == nil {
 				c.session.setCombat(CombatSharedState{
-					Active: true, MonsterID: cs.MonsterID, MonsterName: cs.MonsterName,
-					MonsterHP: cs.MonsterHP, MonsterMax: cs.MonsterMax,
+					Active:          true,
+					MonsterID:       cs.MonsterID,
+					MonsterName:     cs.MonsterName,
+					MonsterSpriteID: cs.MonsterSpriteID,
+					MonsterHP:       cs.MonsterHP,
+					MonsterMax:      cs.MonsterMax,
+					MonsterATK:      cs.MonsterATK,
+					MonsterDEF:      cs.MonsterDEF,
+					MonsterSPD:      cs.MonsterSPD,
+					MonsterIsBoss:   cs.IsBoss,
+					Phase:           RoundPhaseCollect,
+					RoundNum:        1,
 				})
 				c.session.pushEvent(SessionEvent{Kind: "combat_start", Text: cs.MonsterName})
 			}
@@ -152,11 +186,24 @@ func (c *Client) readerLoop(scanner *bufio.Scanner) {
 				if cs.LogLine != "" {
 					current.LastLog = cs.LogLine
 				}
+				if cs.Phase != "" {
+					current.Phase = cs.Phase
+				}
+				current.SecondsLeft = cs.SecondsLeft
+				if cs.RoundNum > 0 {
+					current.RoundNum = cs.RoundNum
+				}
 				players := make([]CombatPlayer, 0, len(cs.Players))
 				for _, p := range cs.Players {
 					players = append(players, CombatPlayer{
-						PeerID: p.PeerID, HP: p.HP, MaxHP: p.MaxHP,
-						MP: p.MP, MaxMP: p.MaxMP, Ready: p.Ready,
+						PeerID: p.PeerID,
+						Name:   p.Name,
+						Class:  p.Class,
+						HP:     p.HP, MaxHP: p.MaxHP,
+						MP: p.MP, MaxMP: p.MaxMP,
+						Ready:  p.Ready,
+						Action: p.Action,
+						Fled:   p.Fled,
 					})
 				}
 				current.Players = players

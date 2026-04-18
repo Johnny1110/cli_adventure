@@ -100,10 +100,23 @@ type Envelope struct {
 // ---------- Payload types ----------
 
 // HelloMsg — client's initial handshake.
+// We include the player's combat-relevant stats so the host can resolve
+// team-play battle rounds (damage, turn order) authoritatively without
+// having to round-trip every step.
 type HelloMsg struct {
 	Name    string `json:"name"`
 	Class   int    `json:"class"` // entity.Class value (Knight=0, Mage=1, Archer=2)
 	Version int    `json:"version"`
+
+	// Initial stats snapshot — used as the starting state for MP combat.
+	Level int `json:"lvl,omitempty"`
+	HP    int `json:"hp,omitempty"`
+	MaxHP int `json:"maxhp,omitempty"`
+	MP    int `json:"mp,omitempty"`
+	MaxMP int `json:"maxmp,omitempty"`
+	ATK   int `json:"atk,omitempty"`
+	DEF   int `json:"def,omitempty"`
+	SPD   int `json:"spd,omitempty"`
 }
 
 // WelcomeMsg — host's reply to Hello.
@@ -159,10 +172,15 @@ type AreaChangeMsg struct {
 
 // CombatStartMsg — all peers enter combat against this monster.
 type CombatStartMsg struct {
-	MonsterID   string `json:"mon_id"`
-	MonsterHP   int    `json:"mon_hp"`
-	MonsterMax  int    `json:"mon_max"`
-	MonsterName string `json:"mon_name"`
+	MonsterID       string `json:"mon_id"`
+	MonsterHP       int    `json:"mon_hp"`
+	MonsterMax      int    `json:"mon_max"`
+	MonsterName     string `json:"mon_name"`
+	MonsterSpriteID string `json:"mon_sprite,omitempty"`
+	MonsterATK      int    `json:"mon_atk,omitempty"`
+	MonsterDEF      int    `json:"mon_def,omitempty"`
+	MonsterSPD      int    `json:"mon_spd,omitempty"`
+	IsBoss          bool   `json:"boss,omitempty"`
 }
 
 // CombatActionKind identifies a battle command.
@@ -185,12 +203,23 @@ type CombatActionMsg struct {
 // CombatSnapshot — per-peer combat status for host broadcasts.
 type CombatSnapshot struct {
 	PeerID string `json:"id"`
+	Name   string `json:"name,omitempty"`
+	Class  int    `json:"cls,omitempty"`
 	HP     int    `json:"hp"`
 	MaxHP  int    `json:"max"`
 	MP     int    `json:"mp"`
 	MaxMP  int    `json:"mpmax"`
-	Ready  bool   `json:"ready"` // submitted their action?
+	Ready  bool   `json:"ready"`         // submitted their action?
+	Action string `json:"act,omitempty"` // "attack"|"defend"|"flee"|"skill" once locked in
+	Fled   bool   `json:"fled,omitempty"`
 }
+
+// CombatRoundPhase — which phase of the team-play round is in progress.
+const (
+	RoundPhaseCollect = "collect" // gathering actions (10s timer)
+	RoundPhaseResolve = "resolve" // playing out the round
+	RoundPhaseEnded   = "ended"   // fight over
+)
 
 // CombatStateMsg — authoritative combat snapshot broadcast every ~10 Hz.
 type CombatStateMsg struct {
@@ -200,6 +229,11 @@ type CombatStateMsg struct {
 	MonsterName string           `json:"mon_name"`
 	Players     []CombatSnapshot `json:"players"`
 	LogLine     string           `json:"log,omitempty"` // latest text
+
+	// Team-play round fields.
+	Phase       string `json:"phase,omitempty"`  // "collect"|"resolve"|"ended"
+	SecondsLeft int    `json:"secs,omitempty"`   // countdown during collect phase
+	RoundNum    int    `json:"round,omitempty"`  // increments each round
 }
 
 // CombatEndMsg — fight is over.

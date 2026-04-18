@@ -147,7 +147,7 @@ func (w *WormholeScreen) backToTown() {
 func (w *WormholeScreen) startHost() {
 	name := entity.ClassTable[w.player.Class].Name
 	room := name + "'s Wormhole"
-	sess, err := netpkg.StartHost(room, name, int(w.player.Class))
+	sess, err := netpkg.StartHostWithStats(room, playerCombatStats(w.player))
 	if err != nil {
 		w.errMsg = "Host failed: " + err.Error()
 		w.state = wormholeError
@@ -156,6 +156,23 @@ func (w *WormholeScreen) startHost() {
 	w.session = sess
 	w.role = netpkg.RoleHost
 	w.state = wormholeLobby
+}
+
+// playerCombatStats distils the Player struct into the stats bundle that
+// the net layer needs for MP combat. Kept in this file so the net package
+// never has to import entity.
+func playerCombatStats(p *entity.Player) netpkg.CombatPlayerStats {
+	name := entity.ClassTable[p.Class].Name
+	return netpkg.CombatPlayerStats{
+		Name:  name,
+		Class: int(p.Class),
+		HP:    p.Stats.HP, MaxHP: p.Stats.MaxHP,
+		MP:  p.Stats.MP, MaxMP: p.Stats.MaxMP,
+		ATK: p.EffectiveATK(),
+		DEF: p.EffectiveDEF(),
+		SPD: p.Stats.SPD,
+		Level: p.Level,
+	}
 }
 
 // --- Room list (join flow) ---
@@ -209,8 +226,8 @@ func (w *WormholeScreen) updateRoomList() {
 			return
 		}
 		room := w.rooms[w.listCursor]
-		name := entity.ClassTable[w.player.Class].Name
-		sess, err := netpkg.Dial(room.Addr, name, int(w.player.Class))
+		_ = entity.ClassTable[w.player.Class].Name
+		sess, err := netpkg.DialWithStats(room.Addr, playerCombatStats(w.player))
 		if err != nil {
 			w.errMsg = "Join failed: " + err.Error()
 			w.state = wormholeError

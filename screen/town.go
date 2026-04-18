@@ -608,11 +608,14 @@ func (t *TownScreen) syncSession() {
 	for _, ev := range t.session.PopEvents() {
 		switch ev.Kind {
 		case "combat_start":
-			// Host opened combat — all clients follow them in.
-			// (Host side switched screens through its own SwitchScreen
-			// when it initiated the fight; clients need this trigger.)
+			// Host opened combat — all clients follow them into the
+			// shared team-play battle screen. The host already switched
+			// its own screen when the fight began.
 			if t.session.Role() == netpkg.RoleClient {
-				t.switcher.SwitchScreen(NewCombatCoopScreen(t.switcher, t.player, t.session, t))
+				t.switcher.SwitchScreen(NewCombatMPScreen(
+					t.switcher, t.player, t.session,
+					"town", t.tileX, t.tileY,
+				))
 			}
 		case "area_change":
 			if t.session.Role() == netpkg.RoleClient && ev.Area != "" && ev.Area != "town" {

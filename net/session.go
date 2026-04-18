@@ -44,26 +44,40 @@ type RemotePlayer struct {
 type CombatPlayer struct {
 	PeerID string
 	Name   string
+	Class  int
 	HP     int
 	MaxHP  int
 	MP     int
 	MaxMP  int
-	Ready  bool
+	Ready  bool   // has submitted an action for the current round
+	Action string // locked-in action label ("attack"|"defend"|"flee"|"skill")
+	Fled   bool   // this player has left the fight via a successful flee
 }
 
 // CombatSharedState is the host-authoritative combat picture.
 type CombatSharedState struct {
-	Active      bool // true between CombatStart and CombatEnd
-	MonsterID   string
-	MonsterName string
-	MonsterHP   int
-	MonsterMax  int
-	Players     []CombatPlayer
-	LastLog     string
-	EndVictory  bool
-	EndXP       int
-	EndCoins    int
-	EndPending  bool // set when CombatEnd arrives; screens consume and clear
+	Active          bool // true between CombatStart and CombatEnd
+	MonsterID       string
+	MonsterName     string
+	MonsterSpriteID string
+	MonsterHP       int
+	MonsterMax      int
+	MonsterATK      int
+	MonsterDEF      int
+	MonsterSPD      int
+	MonsterIsBoss   bool
+	Players         []CombatPlayer
+	LastLog         string
+
+	// Team-play round machine (set by host, mirrored by clients).
+	Phase       string // "collect"|"resolve"|"ended"
+	SecondsLeft int
+	RoundNum    int
+
+	EndVictory bool
+	EndXP      int
+	EndCoins   int
+	EndPending bool // set when CombatEnd arrives; screens consume and clear
 }
 
 // Session is a thread-safe handle into the live multiplayer state.
@@ -309,6 +323,46 @@ func (s *Session) StartCombat(monID, monName string, hp, maxHP int) {
 		return
 	}
 	s.host.startCombat(monID, monName, hp, maxHP)
+}
+
+// MonsterInit bundles the combat-start parameters the host needs.
+type MonsterInit struct {
+	ID         string
+	Name       string
+	SpriteID   string
+	HP         int
+	MaxHP      int
+	ATK        int
+	DEF        int
+	SPD        int
+	IsBoss     bool
+	XPReward   int
+	CoinReward int
+}
+
+// StartTeamCombat opens a full team-play battle. Only meaningful on host.
+// hostHP/MaxHP/etc describe the host player's starting stats and are used
+// by the round resolver to compute damage.
+func (s *Session) StartTeamCombat(mon MonsterInit, host CombatPlayerStats) {
+	if s.role != RoleHost || s.host == nil {
+		return
+	}
+	s.host.startTeamCombat(mon, host)
+}
+
+// CombatPlayerStats bundles the host player's combat stats (and is also
+// used to cache each peer's stats).
+type CombatPlayerStats struct {
+	Name  string
+	Class int
+	HP    int
+	MaxHP int
+	MP    int
+	MaxMP int
+	ATK   int
+	DEF   int
+	SPD   int
+	Level int
 }
 
 // EndCombat is called by the host to close a battle with rewards.
