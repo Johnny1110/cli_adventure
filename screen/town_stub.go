@@ -36,7 +36,7 @@ func (t *TownStubScreen) Update() error {
 func (t *TownStubScreen) Draw(screen *ebiten.Image) {
 	// Title
 	title := "Peaceful Village"
-	titleX := (160 - render.TextWidth(title)) / 2
+	titleX := (320 - render.TextWidth(title)) / 2
 	render.DrawText(screen, title, titleX, 10, render.ColorMint)
 
 	// Player info

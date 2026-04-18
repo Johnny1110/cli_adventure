@@ -22,6 +22,16 @@ var (
 	ColorDarkGray  = color.RGBA{R: 60, G: 60, B: 80, A: 255}
 	ColorBoxBG     = color.RGBA{R: 24, G: 24, B: 40, A: 230}
 	ColorBoxBorder = color.RGBA{R: 140, G: 160, B: 200, A: 255}
+
+	// Rarity colors — the universal RPG color language:
+	// White → Green → Blue → Purple → Gold
+	// These are instantly recognizable to anyone who has played WoW, Diablo,
+	// Destiny, Borderlands, or any loot-based game.
+	ColorRarityCommon    = ColorWhite                                       // white
+	ColorRarityUncommon  = color.RGBA{R: 80, G: 220, B: 120, A: 255}      // green
+	ColorRarityRare      = color.RGBA{R: 80, G: 160, B: 255, A: 255}      // blue
+	ColorRarityEpic      = color.RGBA{R: 190, G: 100, B: 255, A: 255}     // purple
+	ColorRarityLegendary = color.RGBA{R: 255, G: 200, B: 50, A: 255}      // gold/orange
 )
 
 // DrawBox draws a filled rectangle with a 1px border — the standard UI frame.
@@ -63,6 +73,23 @@ func DrawBar(dst *ebiten.Image, x, y, w, h int, fraction float64, fillColor, emp
 // DrawCursor draws a small right-pointing arrow cursor at (x, y).
 func DrawCursor(dst *ebiten.Image, x, y int, clr color.Color) {
 	DrawText(dst, ">", x, y, clr)
+}
+
+// RarityColor maps a rarity integer (matching entity.Rarity values) to its
+// display color. We accept int to avoid an import cycle (render can't import entity).
+func RarityColor(rarity int) color.Color {
+	switch rarity {
+	case 1: // Uncommon
+		return ColorRarityUncommon
+	case 2: // Rare
+		return ColorRarityRare
+	case 3: // Epic
+		return ColorRarityEpic
+	case 4: // Legendary
+		return ColorRarityLegendary
+	default: // Common (0)
+		return ColorRarityCommon
+	}
 }
 
 func drawRect(dst *ebiten.Image, x, y, w, h int, clr color.Color) {

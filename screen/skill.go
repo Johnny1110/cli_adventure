@@ -121,17 +121,17 @@ func (s *SkillScreen) Draw(screen *ebiten.Image) {
 	screen.Fill(render.ColorBG)
 
 	// Title
-	render.DrawText(screen, "Skills", 56, 2, render.ColorLavender)
+	render.DrawText(screen, "Skills", 128, 4, render.ColorLavender)
 
 	// SP display
-	render.DrawText(screen, "SP: "+intToStr(s.player.SkillPoints), 112, 2, render.ColorGold)
+	render.DrawText(screen, "SP: "+intToStr(s.player.SkillPoints), 224, 4, render.ColorGold)
 
 	// Class name
 	info := entity.ClassTable[s.player.Class]
-	render.DrawText(screen, info.Name+" Tree", 4, 14, render.ColorPink)
+	render.DrawText(screen, info.Name+" Tree", 8, 28, render.ColorPink)
 
 	// Skill list
-	y := 26
+	y := 52
 	for i, def := range s.tree {
 		currentLvl := s.player.SkillLevel(def.ID)
 
@@ -148,7 +148,7 @@ func (s *SkillScreen) Draw(screen *ebiten.Image) {
 		nameClr := color.Color(render.ColorWhite)
 		if i == s.cursor {
 			nameClr = render.ColorGold
-			render.DrawCursor(screen, 2, y, render.ColorGold)
+			render.DrawCursor(screen, 4, y, render.ColorGold)
 		}
 		if locked {
 			nameClr = render.ColorDarkGray
@@ -156,7 +156,7 @@ func (s *SkillScreen) Draw(screen *ebiten.Image) {
 			nameClr = render.ColorMint // maxed = green
 		}
 
-		render.DrawText(screen, def.Name, 10, y, nameClr)
+		render.DrawText(screen, def.Name, 20, y, nameClr)
 
 		// Level pips: [***] for Lv.3/3, [**-] for Lv.2/3, etc.
 		pipStr := "["
@@ -175,17 +175,17 @@ func (s *SkillScreen) Draw(screen *ebiten.Image) {
 		if locked {
 			pipClr = render.ColorDarkGray
 		}
-		render.DrawText(screen, pipStr, 88, y, pipClr)
+		render.DrawText(screen, pipStr, 176, y, pipClr)
 
 		// SP cost for next level
 		if currentLvl < def.MaxLevel && !locked {
 			cost := def.SPCost[currentLvl]
-			render.DrawText(screen, intToStr(cost)+"SP", 120, y, render.ColorPeach)
+			render.DrawText(screen, intToStr(cost)+"SP", 240, y, render.ColorPeach)
 		} else if currentLvl >= def.MaxLevel {
-			render.DrawText(screen, "MAX", 120, y, render.ColorMint)
+			render.DrawText(screen, "MAX", 240, y, render.ColorMint)
 		}
 
-		y += 12
+		y += 18
 	}
 
 	// Selected skill details
@@ -193,38 +193,38 @@ func (s *SkillScreen) Draw(screen *ebiten.Image) {
 		def := s.tree[s.cursor]
 		currentLvl := s.player.SkillLevel(def.ID)
 
-		detailY := 80
+		detailY := 160
 		// Divider
-		for x := 4; x < 156; x += 2 {
-			screen.Set(x, detailY-2, render.ColorDarkGray)
+		for x := 8; x < 312; x += 2 {
+			screen.Set(x, detailY-4, render.ColorDarkGray)
 		}
 
-		render.DrawText(screen, def.Name, 4, detailY, render.ColorGold)
+		render.DrawText(screen, def.Name, 8, detailY, render.ColorGold)
 		if currentLvl > 0 {
-			render.DrawText(screen, "Lv."+intToStr(currentLvl), 120, detailY, render.ColorMint)
+			render.DrawText(screen, "Lv."+intToStr(currentLvl), 240, detailY, render.ColorMint)
 		}
 
-		render.DrawText(screen, def.Desc, 4, detailY+10, render.ColorWhite)
+		render.DrawText(screen, def.Desc, 8, detailY+16, render.ColorWhite)
 
 		// Effect info
-		infoY := detailY + 34
-		render.DrawText(screen, def.SpecialDesc, 4, infoY, render.ColorSky)
+		infoY := detailY + 52
+		render.DrawText(screen, def.SpecialDesc, 8, infoY, render.ColorSky)
 
 		if currentLvl > 0 && currentLvl <= 3 {
 			mpCost := def.MPCost[currentLvl-1]
-			render.DrawText(screen, "MP: "+intToStr(mpCost), 100, infoY, render.ColorLavender)
+			render.DrawText(screen, "MP: "+intToStr(mpCost), 200, infoY, render.ColorLavender)
 		} else if currentLvl == 0 {
 			// Show Lv.1 stats as preview
-			render.DrawText(screen, "MP: "+intToStr(def.MPCost[0]), 100, infoY, render.ColorGray)
+			render.DrawText(screen, "MP: "+intToStr(def.MPCost[0]), 200, infoY, render.ColorGray)
 		}
 	}
 
 	// Message overlay
 	if s.msgTick > 0 {
-		render.DrawBox(screen, 20, 56, 120, 20, render.ColorBoxBG, render.ColorGold)
-		render.DrawText(screen, s.msgText, 26, 60, render.ColorGold)
+		render.DrawBox(screen, 40, 112, 240, 40, render.ColorBoxBG, render.ColorGold)
+		render.DrawText(screen, s.msgText, 52, 120, render.ColorGold)
 	}
 
 	// Controls
-	render.DrawText(screen, "Z:Learn X:Close", 32, 136, render.ColorGray)
+	render.DrawText(screen, "Z:Learn X:Close", 88, 276, render.ColorGray)
 }

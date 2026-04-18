@@ -37,6 +37,7 @@ const (
 	SI = asset.TileSign
 	WE = asset.TileWell
 	WH = asset.TileWormhole
+	SC = asset.TileSaveCrystal
 )
 
 // TownWidth and TownHeight in tiles.
@@ -46,24 +47,32 @@ const (
 )
 
 // TownGround is the base terrain layer.
+//
+// THEORY — Town layout as narrative space:
+// Building placement tells a story. The Merchant and Elder are near the
+// top (the "important" part of town, visible first when entering from the
+// south). The Home is tucked in the bottom-left near water (peaceful,
+// residential). The Blacksmith is in the bottom-right (industrial, away
+// from homes). The Inn is mid-right near the main road (traveler-friendly,
+// easy to find). Each building's position reinforces its role.
 var TownGround = [TownHeight][TownWidth]int{
 	//  0   1   2   3   4   5   6   7   8   9  10  11  12  13  14  15  16  17  18  19
-	{TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR, TR}, // 0
-	{TR, G,  G,  G,  G,  G,  G,  G,  G,  G,  G,  G,  G,  G,  G,  G,  G,  G,  G,  TR}, // 1
-	{TR, G,  RL, RR, RL, RR, G,  G,  G,  G,  G,  G,  G,  G,  RL, RR, RL, RR, G,  TR}, // 2
-	{TR, G,  WT, WT, WT, WT, G,  G,  FP, G,  G,  G,  FB, G,  WT, WT, WT, WT, G,  TR}, // 3
+	{TR, TR, TR, TR, TR, TR, TR, TR, TR, D,  D,  D,  TR, TR, TR, TR, TR, TR, TR, TR}, // 0  north exit
+	{TR, G,  G,  G,  G,  G,  G,  G,  G,  P,  P,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 1
+	{TR, G,  RL, RR, RL, RR, G,  G,  G,  P,  G,  P,  G,  G,  RL, RR, RL, RR, G,  TR}, // 2
+	{TR, G,  WT, WT, WT, WT, G,  G,  FP, P,  G,  P,  FB, G,  WT, WT, WT, WT, G,  TR}, // 3
 	{TR, G,  WM, WM, WM, WM, G,  G,  G,  P,  P,  P,  G,  G,  WM, WM, WM, WM, G,  TR}, // 4
 	{TR, G,  WB, DR, WB, WB, G,  G,  G,  P,  G,  P,  G,  G,  WB, WB, DR, WB, G,  TR}, // 5
 	{TR, G,  G,  P,  G,  G,  G,  G,  G,  P,  WE, P,  G,  G,  G,  G,  P,  G,  G,  TR}, // 6
 	{TR, G,  G,  P,  G,  FP, G,  G,  G,  P,  P,  P,  G,  G,  FB, G,  P,  G,  G,  TR}, // 7
-	{TR, G,  G,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  G,  G,  TR}, // 8  main road
-	{TR, G,  G,  G,  G,  G,  G,  G,  G,  P,  SI, P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 9
-	{TR, G,  FP, G,  G,  G,  G,  FB, G,  P,  G,  P,  G,  WH, G,  G,  G,  FB, G,  TR}, // 10 — wormhole at (13,10)
-	{TR, G,  G,  G,  G,  G,  G,  G,  G,  P,  G,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 11
-	{TR, WA, WA, WA, WA, G,  G,  G,  G,  P,  G,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 12
-	{TR, WA, WA, WA, WA, G,  G,  G,  G,  P,  G,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 13
-	{TR, G,  BR, BR, G,  G,  G,  G,  G,  P,  G,  P,  G,  G,  G,  TR, G,  G,  G,  TR}, // 14
-	{TR, G,  G,  G,  G,  G,  G,  G,  G,  P,  G,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 15
+	{D,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  P,  D},  // 8  main road + west/east exits
+	{TR, G,  G,  G,  G,  G,  G,  G,  G,  P,  SI, P,  SC, G,  G,  G,  G,  G,  G,  TR}, // 9  save crystal at (12,9)
+	{TR, G,  FP, G,  G,  G,  G,  FB, G,  P,  G,  P,  G,  WH, G,  RL, RR, G,  G,  TR}, // 10 — wormhole(13,10), inn roof
+	{TR, G,  G,  G,  G,  G,  G,  G,  G,  P,  G,  P,  G,  RL, RR, WB, DR, G,  G,  TR}, // 11 smith roof, inn door(16,11)
+	{TR, WA, WA, WA, WA, RL, RR, G,  G,  P,  G,  P,  G,  WT, WT, G,  P,  G,  G,  TR}, // 12 smith walls
+	{TR, WA, WA, WA, WA, WT, WT, G,  G,  P,  G,  P,  G,  WB, DR, G,  P,  G,  G,  TR}, // 13 smith door(14,13)
+	{TR, G,  BR, BR, G,  WB, DR, G,  G,  P,  G,  P,  G,  G,  P,  G,  G,  G,  G,  TR}, // 14 home(6,14), smith path
+	{TR, G,  G,  G,  G,  G,  P,  G,  G,  P,  G,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 15
 	{TR, G,  G,  G,  G,  G,  G,  G,  G,  P,  P,  P,  G,  G,  G,  G,  G,  G,  G,  TR}, // 16
 	{TR, TR, TR, TR, TR, TR, TR, TR, TR, D,  D,  D,  TR, TR, TR, TR, TR, TR, TR, TR}, // 17  south exit
 }
@@ -99,7 +108,7 @@ func TownSolid() [TownHeight][TownWidth]bool {
 		for x := 0; x < TownWidth; x++ {
 			t := TownGround[y][x]
 			switch t {
-			case TR, WA, WT, WM, WB, RL, RR, WE:
+			case TR, WA, WT, WM, WB, RL, RR, WE, SC:
 				solid[y][x] = true
 			}
 		}
@@ -107,6 +116,9 @@ func TownSolid() [TownHeight][TownWidth]bool {
 	// Doors are walkable (they trigger NPC interaction)
 	solid[5][3] = false   // merchant door
 	solid[5][16] = false  // elder door
+	solid[14][6] = false  // home door
+	solid[11][16] = false // inn door
+	solid[13][14] = false // blacksmith door
 	return solid
 }
 
@@ -122,11 +134,33 @@ func TownNPCs() []NPCSpawn {
 	return []NPCSpawn{
 		{Name: "Merchant", TileX: 3, TileY: 6, Role: "merchant"},
 		{Name: "Elder", TileX: 16, TileY: 6, Role: "elder"},
+		{Name: "Bed", TileX: 6, TileY: 13, Role: "home"},
+		{Name: "Innkeeper", TileX: 16, TileY: 12, Role: "innkeeper"},
+		{Name: "Blacksmith", TileX: 14, TileY: 14, Role: "blacksmith"},
 	}
 }
 
-// TownExitTile is the tile position of the south exit (leads to Wild).
-var TownExitY = 17
+// Town exit positions. The town is a hub with four exits:
+//   North (row 0, cols 9-11)  → Frozen Path (snow chain)
+//   South (row 17, cols 9-11) → Enchanted Forest (east chain — original path)
+//   West  (col 0, row 8)      → Arid Desert (west chain — post-boss)
+//   East  (col 19, row 8)     → Murky Swamp (south chain)
+//
+// THEORY — Why use row/column edges:
+// The existing AreaConnection system uses horizontal strip matching
+// (FromY + FromMinX..FromMaxX). For east/west exits we match column
+// edges similarly but check tileX instead of tileY. The town.go
+// updateWalking() function handles each exit direction explicitly.
+var TownExitY     = 17 // south exit row
+var TownExitNorthY = 0  // north exit row
+var TownExitWestX  = 0  // west exit column
+var TownExitEastX  = 19 // east exit column
+
+// Save crystal position in the town.
+const (
+	TownSaveCrystalX = 12
+	TownSaveCrystalY = 9
+)
 
 // Wormhole tile position in the town. Players can face it and press Z to
 // open the multiplayer menu. The tile itself is walkable (stepping onto it

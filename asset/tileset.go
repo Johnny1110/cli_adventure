@@ -36,6 +36,7 @@ const (
 	TileSign       = 14
 	TileWell       = 15
 	TileWormhole   = 16 // swirling portal — interactable
+	TileSaveCrystal = 17 // glowing crystal — save point
 )
 
 // townTileColors defines the dominant color for each placeholder tile.
@@ -57,7 +58,8 @@ var townTileColors = map[int]tiledef{
 	TileFlowerBlue: {bg: c(80, 160, 80), pattern: "flower_blue"},
 	TileSign:       {bg: c(80, 160, 80), pattern: "sign"},
 	TileWell:       {bg: c(130, 130, 140), pattern: "well"},
-	TileWormhole:   {bg: c(80, 160, 80), pattern: "wormhole"},
+	TileWormhole:    {bg: c(80, 160, 80), pattern: "wormhole"},
+	TileSaveCrystal: {bg: c(80, 160, 80), pattern: "save_crystal"},
 }
 
 type tiledef struct {
@@ -286,6 +288,51 @@ func drawTile(img *ebiten.Image, ox, oy int, def tiledef) {
 				}
 			}
 		}
+
+	case "save_crystal":
+		// Grass background + glowing crystal save point.
+		// A faceted blue-white crystal on a small stone pedestal.
+		drawTile(img, ox, oy, tiledef{bg: def.bg, pattern: "grass"})
+		pedestal := c(140, 135, 150)
+		crystalBase := c(80, 160, 240)
+		crystalMid := c(140, 200, 255)
+		crystalTip := c(220, 240, 255)
+		sparkle := c(255, 255, 255)
+		// Stone pedestal
+		for x := 5; x < 12; x++ {
+			for y := 11; y < 14; y++ {
+				img.Set(ox+x, oy+y, pedestal)
+			}
+		}
+		// Crystal body (diamond shape)
+		// Row by row from top to bottom:
+		img.Set(ox+8, oy+3, sparkle)     // tip sparkle
+		img.Set(ox+8, oy+4, crystalTip)  // apex
+		img.Set(ox+7, oy+5, crystalMid)
+		img.Set(ox+8, oy+5, crystalTip)
+		img.Set(ox+9, oy+5, crystalMid)
+		for x := 6; x < 11; x++ {
+			img.Set(ox+x, oy+6, crystalMid)
+		}
+		img.Set(ox+8, oy+6, crystalTip) // center highlight
+		for x := 6; x < 11; x++ {
+			img.Set(ox+x, oy+7, crystalBase)
+		}
+		img.Set(ox+7, oy+7, crystalMid)
+		img.Set(ox+8, oy+7, crystalMid)
+		for x := 6; x < 11; x++ {
+			img.Set(ox+x, oy+8, crystalBase)
+		}
+		for x := 6; x < 11; x++ {
+			img.Set(ox+x, oy+9, crystalBase)
+		}
+		img.Set(ox+7, oy+9, crystalMid)
+		img.Set(ox+8, oy+10, crystalBase)
+		img.Set(ox+7, oy+10, crystalBase)
+		img.Set(ox+9, oy+10, crystalBase)
+		// Corner sparkles
+		img.Set(ox+5, oy+4, sparkle)
+		img.Set(ox+11, oy+6, sparkle)
 
 	case "well":
 		// Stone well

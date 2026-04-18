@@ -76,6 +76,7 @@ type WildScreen struct {
 	fadeTick  int
 	fadeDir   int // 1 = fading out, -1 = fading in
 	nextArea  string
+	nextEdge  data.ExitEdge // which edge the player enters the next area from
 
 	// Boss
 	bossDialogue *render.DialogueBox
@@ -137,6 +138,44 @@ func NewWildScreen(switcher ScreenSwitcher, player *entity.Player, areaName stri
 	return NewWildScreenAt(switcher, player, areaName, -1, -1)
 }
 
+// NewWildScreenFromEdge creates a wild screen with direction-aware spawning.
+// The player appears on the edge opposite to the direction they came from.
+// E.g., if they walked east out of town (entering from the west), they spawn
+// on the west edge of the new map.
+func NewWildScreenFromEdge(switcher ScreenSwitcher, player *entity.Player, areaName string, entryEdge data.ExitEdge) *WildScreen {
+	areas := data.AllAreas()
+	tileset := asset.GenerateWildTileset()
+
+	w := &WildScreen{
+		switcher:       switcher,
+		player:         player,
+		areas:          areas,
+		tileset:        tileset,
+		facing:         dirDown,
+		moveSpeed:      2.0,
+		charSprites:    asset.GenerateCharSprites(),
+		monsterSprites: asset.GenerateMonsterSprites(),
+		// Start with a fade-in so the transition from town is smooth.
+		state:    wildTransition,
+		fadeTick: 15,
+		fadeDir:  -1, // fading IN (15 → 0)
+	}
+	w.loadAreaFromEdge(areaName, entryEdge)
+
+	// Set facing based on entry direction (face inward)
+	switch entryEdge {
+	case data.EdgeNorth:
+		w.facing = dirDown
+	case data.EdgeSouth:
+		w.facing = dirUp
+	case data.EdgeWest:
+		w.facing = dirRight
+	case data.EdgeEast:
+		w.facing = dirLeft
+	}
+	return w
+}
+
 // NewWildScreenAt creates a wild exploration screen at a specific tile position.
 // Pass (-1, -1) to use the area's default start position.
 // This is used when returning from combat to preserve the player's location.
@@ -167,7 +206,14 @@ func NewWildScreenAt(switcher ScreenSwitcher, player *entity.Player, areaName st
 	return w
 }
 
+// loadArea loads a new area with direction-aware spawning.
+// entryEdge indicates which edge the player enters from. Pass -1 to use
+// the area's default PlayerStartX/Y (for initial load or combat return).
 func (w *WildScreen) loadArea(name string) {
+	w.loadAreaFromEdge(name, -1)
+}
+
+func (w *WildScreen) loadAreaFromEdge(name string, entryEdge data.ExitEdge) {
 	area, ok := w.areas[name]
 	if !ok {
 		return
@@ -192,8 +238,14 @@ func (w *WildScreen) loadArea(name string) {
 	w.tileMap = render.NewTileMap(area.Width, area.Height, ground, overlay, solid, w.tileset)
 	w.camera = render.NewCamera(area.Width, area.Height)
 
-	w.tileX = area.PlayerStartX
-	w.tileY = area.PlayerStartY
+	// Spawn position: use direction-aware spawning if an entry edge is given,
+	// otherwise fall back to the area's default start position.
+	if entryEdge >= 0 {
+		w.tileX, w.tileY = data.SpawnForEntry(area, entryEdge)
+	} else {
+		w.tileX = area.PlayerStartX
+		w.tileY = area.PlayerStartY
+	}
 	w.pixelX = float64(w.tileX * render.TileSize)
 	w.pixelY = float64(w.tileY * render.TileSize)
 	w.stepCount = 0
@@ -201,8 +253,39 @@ func (w *WildScreen) loadArea(name string) {
 	w.particles = render.NewParticleSystem(area.MapKey, area.Width, area.Height)
 }
 
-func (w *WildScreen) OnEnter() {}
-func (w *WildScreen) OnExit()  {}
+func (w *WildScreen) OnEnter() {
+	// Level-gate guard check: when entering a new area, if the player
+	// is underleveled, show a warning dialogue from a guard NPC.
+	//
+	// THEORY — Soft level gates:
+	// We don't block the player from entering — that would feel
+	// frustrating. Instead, a guard warns them. If they're strong
+	// enough, the guard encourages them. This respects player agency
+	// while naturally guiding progression. The warning creates tension:
+	// "I was warned... should I push deeper or go back and grind?"
+	if w.area != nil {
+		// Skip guard warning if this area's boss is already defeated.
+		// The area is cleared — no point warning the player about danger
+		// that no longer exists. This also prevents the guard dialogue
+		// from accidentally feeding into updateBossDialogue's boss-fight
+		// trigger (the primary fix for the re-trigger bug is there, but
+		// this avoids the unnecessary dialogue entirely).
+		bossKey := bossKeyForArea(w.area.MapKey)
+		alreadyCleared := bossKey != "" && w.player.BossDefeated != nil && w.player.BossDefeated[bossKey]
+
+		if !alreadyCleared {
+			_, warning := data.CanEnterArea(w.area.MapKey, w.player.Level, w.player.BossDefeated)
+			if warning != "" {
+				w.bossDialogue = render.NewDialogueBox([]string{
+					"A guard stands at\nthe entrance...",
+					warning,
+				})
+				w.state = wildBossDialogue
+			}
+		}
+	}
+}
+func (w *WildScreen) OnExit() {}
 
 func (w *WildScreen) Update() error {
 	w.walkTick++
@@ -375,6 +458,11 @@ func (w *WildScreen) updateWalking() {
 
 // onStepComplete is called when the player finishes moving to a new tile.
 func (w *WildScreen) onStepComplete() {
+	// Advance day/night cycle with each step
+	if w.player.DayNight != nil {
+		w.player.DayNight.Step()
+	}
+
 	// Check area transitions. In multiplayer, only the host initiates these;
 	// clients follow via the area_change event dispatched from syncSession.
 	if w.session != nil && w.session.Role() == netpkg.RoleClient {
@@ -383,29 +471,50 @@ func (w *WildScreen) onStepComplete() {
 		return
 	}
 	for _, conn := range w.area.Connections {
-		if w.tileY == conn.FromY && w.tileX >= conn.FromMinX && w.tileX <= conn.FromMaxX {
-			if conn.TargetArea == "town" {
-				// Return to town. In MP, announce the move so clients follow.
-				if w.session != nil && w.session.Role() == netpkg.RoleHost {
-					w.session.BroadcastAreaChange("town", 9, 10)
-					w.switcher.SwitchScreen(NewTownScreenMP(w.switcher, w.player, w.session))
-					return
-				}
-				w.switcher.SwitchScreen(NewTownScreen(w.switcher, w.player))
+		// Check if the player is standing on this exit zone.
+		// North/South exits check a horizontal tile range at a specific row.
+		// East/West exits check a vertical tile range at a specific column.
+		hit := false
+		switch conn.Edge {
+		case data.EdgeNorth, data.EdgeSouth:
+			hit = w.tileY == conn.FromY && w.tileX >= conn.FromMinX && w.tileX <= conn.FromMaxX
+		case data.EdgeEast, data.EdgeWest:
+			hit = w.tileX == conn.FromX && w.tileY >= conn.FromMinY && w.tileY <= conn.FromMaxY
+		}
+		if !hit {
+			continue
+		}
+
+		if conn.TargetArea == "town" {
+			// Return to town via fade transition.
+			if w.session != nil && w.session.Role() == netpkg.RoleHost {
+				w.session.BroadcastAreaChange("town", 9, 10)
+				w.switcher.SwitchScreen(NewTownScreenMP(w.switcher, w.player, w.session))
 				return
 			}
-			// Transition to another wild area. In MP, broadcast first so
-			// clients enter the same area in their own syncSession pass.
-			if w.session != nil && w.session.Role() == netpkg.RoleHost {
-				sx, sy := areaStart(conn.TargetArea)
-				w.session.BroadcastAreaChange(conn.TargetArea, sx, sy)
-			}
-			w.nextArea = conn.TargetArea
+			// Use the same fade system — nextArea="town" is a special case
+			// handled in updateTransition.
+			w.nextArea = "town"
 			w.fadeTick = 0
 			w.fadeDir = 1
 			w.state = wildTransition
 			return
 		}
+		// Transition to another wild area. In MP, broadcast first so
+		// clients enter the same area in their own syncSession pass.
+		entryEdge := data.OppositeEdge(conn.Edge)
+		if w.session != nil && w.session.Role() == netpkg.RoleHost {
+			if a, ok := w.areas[conn.TargetArea]; ok {
+				sx, sy := data.SpawnForEntry(a, entryEdge)
+				w.session.BroadcastAreaChange(conn.TargetArea, sx, sy)
+			}
+		}
+		w.nextArea = conn.TargetArea
+		w.nextEdge = entryEdge
+		w.fadeTick = 0
+		w.fadeDir = 1
+		w.state = wildTransition
+		return
 	}
 
 	// Check for treasure chest
@@ -441,16 +550,23 @@ func (w *WildScreen) onStepComplete() {
 		return
 	}
 
-	// Boss area: trigger boss encounter when player moves near center
-	if w.area.MapKey == "lair" && !w.bossTriggered {
-		if w.tileY <= 5 {
-			w.bossTriggered = true
-			w.bossDialogue = render.NewDialogueBox([]string{
-				"The ground trembles...",
-				"A massive Dragon\nappears before you!",
-			})
-			w.state = wildBossDialogue
-			return
+	// Boss area: trigger boss encounter when player moves near center.
+	// Each boss area has EncounterRate=0 (no randoms) and a single boss
+	// in its encounter table. The boss triggers when the player walks
+	// into the top half of the arena.
+	if w.area.EncounterRate == 0 && !w.bossTriggered {
+		bossName := bossForArea(w.area.MapKey)
+		if bossName != "" {
+			bossKey := bossKeyForArea(w.area.MapKey)
+			// If already defeated, let the player explore freely
+			if w.player.BossDefeated != nil && w.player.BossDefeated[bossKey] {
+				// No boss — area is cleared
+			} else if w.tileY <= w.area.Height/2 {
+				w.bossTriggered = true
+				w.bossDialogue = render.NewDialogueBox(bossIntroLines(w.area.MapKey, bossName))
+				w.state = wildBossDialogue
+				return
+			}
 		}
 	}
 
@@ -487,6 +603,16 @@ func (w *WildScreen) triggerEncounter() {
 			template := data.MonsterTemplates[e.Name]
 			if template != nil {
 				w.encounterMon = template.Clone()
+				// Night makes monsters stronger
+				if w.player.DayNight != nil {
+					mult := w.player.DayNight.MonsterStatMultiplier()
+					if mult > 1.0 {
+						w.encounterMon.HP = int(float64(w.encounterMon.HP) * mult)
+						w.encounterMon.MaxHP = w.encounterMon.HP
+						w.encounterMon.ATK = int(float64(w.encounterMon.ATK) * mult)
+						w.encounterMon.DEF = int(float64(w.encounterMon.DEF) * mult)
+					}
+				}
 				// 5% chance of rare golden variant!
 				if rand.Intn(100) < 5 {
 					w.encounterMon.MakeGolden()
@@ -500,31 +626,71 @@ func (w *WildScreen) triggerEncounter() {
 }
 
 func (w *WildScreen) giveChestLoot() {
-	// Random chest loot table
+	// THEORY — Area-scaled chest loot:
+	// The loot table is split into tiers: coins, consumables, old-school
+	// weapon/armor drops, and NEW equipment (helmets, boots, shields,
+	// accessories) pulled from the area's loot pool. The new gear has a
+	// ~25% combined chance, making each chest exciting — there's always
+	// a chance of finding gear for one of your empty slots.
 	roll := rand.Intn(100)
 	var msg string
 	switch {
-	case roll < 30:
-		// Coins
-		amount := 20 + rand.Intn(30)
+	case roll < 20:
+		// Coins (scaled to area level)
+		base := 20
+		if w.area != nil {
+			// Higher-level areas give more coins
+			for _, wa := range data.WorldGraph {
+				if wa.ID == w.area.MapKey {
+					base = 20 + wa.MinLevel*5
+					break
+				}
+			}
+		}
+		amount := base + rand.Intn(30)
 		w.player.Coins += amount
 		msg = "Found " + intToStr(amount) + " coins!"
-	case roll < 55:
+	case roll < 35:
 		// Potion
 		w.player.AddItem(entity.Item{Name: "Potion", Type: entity.ItemConsumable, StatBoost: 15, Price: 15, ClassRestrict: -1})
 		msg = "Found a Potion!"
-	case roll < 70:
+	case roll < 45:
 		// Hi Potion
 		w.player.AddItem(entity.Item{Name: "Hi Potion", Type: entity.ItemConsumable, StatBoost: 40, Price: 40, ClassRestrict: -1})
 		msg = "Found a Hi Potion!"
-	case roll < 85:
+	case roll < 55:
 		// Crystal Sword (rare weapon!) — universal, any class
 		w.player.AddItem(entity.Item{Name: "Crystal Sword", Type: entity.ItemWeapon, StatBoost: 9, Price: 200, ClassRestrict: -1})
 		msg = "Found a Crystal Sword!"
-	case roll < 95:
+	case roll < 65:
 		// Dragon Scale armor (rare!) — universal, any class
 		w.player.AddItem(entity.Item{Name: "Dragon Scale", Type: entity.ItemArmor, StatBoost: 9, Price: 200, ClassRestrict: -1})
 		msg = "Found Dragon Scale\narmor!"
+	case roll < 90:
+		// NEW EQUIPMENT — pull from area loot table with rarity roll
+		areaKey := ""
+		areaMinLevel := 0
+		if w.area != nil {
+			areaKey = w.area.MapKey
+			// Look up recommended level for rarity scaling
+			if wa, ok := data.WorldGraph[areaKey]; ok {
+				areaMinLevel = wa.MinLevel
+			}
+		}
+		item, ok := data.RollLootWithRarity(areaKey, areaMinLevel)
+		if ok {
+			w.player.AddItem(item)
+			rarityTag := ""
+			if item.Rarity > entity.RarityCommon {
+				rarityTag = "[" + item.Rarity.RarityName() + "] "
+			}
+			msg = "Found " + rarityTag + "\n" + item.Name + "!"
+		} else {
+			// Fallback: coins if no loot for this area
+			amount := 50 + rand.Intn(50)
+			w.player.Coins += amount
+			msg = "Found " + intToStr(amount) + " coins!"
+		}
 	default:
 		// Jackpot: lots of coins
 		amount := 100 + rand.Intn(50)
@@ -597,8 +763,12 @@ func (w *WildScreen) updateTransition() {
 	if w.fadeDir == 1 {
 		w.fadeTick++
 		if w.fadeTick >= 15 {
-			// Fully faded out — load new area
-			w.loadArea(w.nextArea)
+			// Fully faded out — either load new wild area or switch to town
+			if w.nextArea == "town" {
+				w.switcher.SwitchScreen(NewTownScreen(w.switcher, w.player))
+				return
+			}
+			w.loadAreaFromEdge(w.nextArea, w.nextEdge)
 			w.fadeDir = -1
 		}
 	} else if w.fadeDir == -1 {
@@ -629,13 +799,91 @@ func (w *WildScreen) updateBossDialogue() {
 	if w.bossDialogue != nil {
 		w.bossDialogue.Update()
 		if w.bossDialogue.Finished {
-			// Trigger boss fight
-			dragon := data.MonsterTemplates["Dragon"]
-			if dragon != nil {
-				w.encounterMon = dragon.Clone()
+			// Trigger boss fight using the area's boss monster
+			bossName := bossForArea(w.area.MapKey)
+			if bossName == "" {
+				w.state = wildWalking
+				return
+			}
+			// Guard: don't re-fight a boss that's already defeated.
+			// This dialogue might have come from a level-gate warning
+			// in OnEnter rather than a boss intro, so we must check
+			// BossDefeated here at the point of action, not just at
+			// the point of entry.
+			bossKey := bossKeyForArea(w.area.MapKey)
+			if bossKey != "" && w.player.BossDefeated != nil && w.player.BossDefeated[bossKey] {
+				w.state = wildWalking
+				return
+			}
+			boss := data.MonsterTemplates[bossName]
+			if boss != nil {
+				w.encounterMon = boss.Clone()
 				w.flashTick = 0
 				w.state = wildEncounterFlash
 			}
+		}
+	}
+}
+
+// bossForArea returns the monster template name for the boss in a given area.
+// Returns "" if the area has no boss.
+func bossForArea(areaKey string) string {
+	switch areaKey {
+	case "lair":
+		return "Dragon"
+	case "ice_cavern":
+		return "Ice Wyrm"
+	case "volcano":
+		return "Hydra"
+	case "buried_temple":
+		return "Sphinx"
+	default:
+		return ""
+	}
+}
+
+// bossKeyForArea returns the BossDefeated map key for an area's boss.
+func bossKeyForArea(areaKey string) string {
+	switch areaKey {
+	case "lair":
+		return "dragon"
+	case "ice_cavern":
+		return "ice_wyrm"
+	case "volcano":
+		return "hydra"
+	case "buried_temple":
+		return "sphinx"
+	default:
+		return ""
+	}
+}
+
+// bossIntroLines returns the pre-battle dialogue for each boss area.
+func bossIntroLines(areaKey, bossName string) []string {
+	switch areaKey {
+	case "lair":
+		return []string{
+			"The ground trembles...",
+			"A massive Dragon\nappears before you!",
+		}
+	case "ice_cavern":
+		return []string{
+			"The air freezes solid\naround you...",
+			"An enormous Ice Wyrm\ncoils from the shadows!",
+		}
+	case "volcano":
+		return []string{
+			"Lava erupts from\nthe ground!",
+			"A terrifying Hydra\nrises from the magma!",
+		}
+	case "buried_temple":
+		return []string{
+			"Ancient runes glow\non the temple walls...",
+			"The Sphinx awakens\nwith a riddle of death!",
+		}
+	default:
+		return []string{
+			"A powerful " + bossName + "\nblocks your path!",
 		}
 	}
 }
@@ -661,9 +909,26 @@ func (w *WildScreen) Draw(screen *ebiten.Image) {
 		w.particles.Draw(screen, w.camera.X, w.camera.Y)
 	}
 
+	// Day/night tint overlay
+	w.drawDayNightTint(screen)
+
 	// HUD
 	render.DrawText(screen, w.area.Name, 4, 2, render.ColorMint)
-	render.DrawText(screen, "X:Menu B:Bag E:Equip", 16, 136, render.ColorDarkGray)
+	// Show time of day in HUD — right-aligned to 320 width
+	if w.player.DayNight != nil {
+		phaseName := w.player.DayNight.PhaseName()
+		phaseClr := render.ColorWhite
+		switch w.player.DayNight.Phase {
+		case entity.PhaseNight:
+			phaseClr = render.ColorSky
+		case entity.PhaseDusk:
+			phaseClr = render.ColorPeach
+		case entity.PhaseDawn:
+			phaseClr = render.ColorPink
+		}
+		render.DrawText(screen, phaseName, 280, 2, phaseClr)
+	}
+	render.DrawText(screen, "X:Menu B:Bag E:Equip", 32, 276, render.ColorDarkGray)
 
 	// State overlays
 	switch w.state {
@@ -704,7 +969,7 @@ func (w *WildScreen) drawRemotePlayers(screen *ebiten.Image) {
 		}
 		sx := float64(rp.TileX*render.TileSize) - float64(w.camera.X)
 		sy := float64(rp.TileY*render.TileSize) - float64(w.camera.Y)
-		if sx < -16 || sx > 160 || sy < -16 || sy > 144 {
+		if sx < -16 || sx > 320 || sy < -16 || sy > 288 {
 			continue
 		}
 		sheet.DrawFrame(screen, 0, sx, sy)
@@ -721,7 +986,7 @@ func (w *WildScreen) drawRemotePlayers(screen *ebiten.Image) {
 
 func (w *WildScreen) drawFlash(screen *ebiten.Image) {
 	// Classic battle encounter flash: screen alternates white/black
-	flash := ebiten.NewImage(160, 144)
+	flash := ebiten.NewImage(320, 288)
 	if (w.flashTick/3)%2 == 0 {
 		flash.Fill(color.RGBA{R: 255, G: 255, B: 255, A: 200})
 	} else {
@@ -734,43 +999,66 @@ func (w *WildScreen) drawFade(screen *ebiten.Image) {
 	alpha := float64(w.fadeTick) / 15.0
 	if alpha > 1 { alpha = 1 }
 	if alpha < 0 { alpha = 0 }
-	fade := ebiten.NewImage(160, 144)
+	fade := ebiten.NewImage(320, 288)
 	a := uint8(alpha * 255)
 	fade.Fill(color.RGBA{R: 0, G: 0, B: 0, A: a})
 	screen.DrawImage(fade, nil)
+
+	// Show area name during fade-in (when arriving at a new area).
+	// Only show when nearly fully black (alpha > 0.7) so the text
+	// appears briefly then fades away with the overlay.
+	if alpha > 0.7 && w.area != nil {
+		nameLen := len(w.area.Name) * 8
+		nameX := (320 - nameLen) / 2
+		render.DrawText(screen, w.area.Name, nameX, 136, render.ColorGold)
+	}
 }
 
 func (w *WildScreen) drawPause(screen *ebiten.Image) {
-	render.DrawBox(screen, 8, 8, 144, 128, render.ColorBoxBG, render.ColorSky)
+	render.DrawBox(screen, 16, 16, 288, 256, render.ColorBoxBG, render.ColorSky)
 
 	info := entity.ClassTable[w.player.Class]
-	render.DrawText(screen, info.Name+" Lv."+intToStr(w.player.Level), 14, 12, render.ColorPink)
+	render.DrawText(screen, info.Name+" Lv."+intToStr(w.player.Level), 28, 24, render.ColorPink)
 
 	s := w.player.Stats
-	y := 24
-	render.DrawText(screen, "HP: "+intToStr(s.HP)+"/"+intToStr(s.MaxHP), 14, y, render.ColorGreen)
-	render.DrawBar(screen, 80, y+1, 60, 5, float64(s.HP)/float64(s.MaxHP), render.ColorGreen, render.ColorDarkGray)
-	y += 10
-	render.DrawText(screen, "MP: "+intToStr(s.MP)+"/"+intToStr(s.MaxMP), 14, y, render.ColorSky)
-	render.DrawBar(screen, 80, y+1, 60, 5, float64(s.MP)/float64(s.MaxMP), render.ColorSky, render.ColorDarkGray)
-	y += 12
-	render.DrawText(screen, "ATK: "+intToStr(w.player.EffectiveATK()), 14, y, render.ColorPeach)
-	render.DrawText(screen, "DEF: "+intToStr(w.player.EffectiveDEF()), 80, y, render.ColorSky)
-	y += 10
-	render.DrawText(screen, "SPD: "+intToStr(s.SPD), 14, y, render.ColorGold)
-	y += 14
+	y := 44
+	render.DrawText(screen, "HP: "+intToStr(s.HP)+"/"+intToStr(s.MaxHP), 28, y, render.ColorGreen)
+	render.DrawBar(screen, 160, y+1, 120, 7, float64(s.HP)/float64(s.MaxHP), render.ColorGreen, render.ColorDarkGray)
+	y += 18
+	render.DrawText(screen, "MP: "+intToStr(s.MP)+"/"+intToStr(s.MaxMP), 28, y, render.ColorSky)
+	render.DrawBar(screen, 160, y+1, 120, 7, float64(s.MP)/float64(s.MaxMP), render.ColorSky, render.ColorDarkGray)
+	y += 22
+	render.DrawText(screen, "ATK: "+intToStr(w.player.EffectiveATK()), 28, y, render.ColorPeach)
+	render.DrawText(screen, "DEF: "+intToStr(w.player.EffectiveDEF()), 160, y, render.ColorSky)
+	y += 18
+	render.DrawText(screen, "SPD: "+intToStr(s.SPD), 28, y, render.ColorGold)
+	y += 26
 
 	// Area info
-	render.DrawText(screen, "Area: "+w.area.Name, 14, y, render.ColorMint)
-	y += 12
+	render.DrawText(screen, "Area: "+w.area.Name, 28, y, render.ColorMint)
+	y += 22
 
 	// Quest progress
 	q := w.player.ActiveQuest()
 	if q != nil {
-		render.DrawText(screen, "Quest: "+q.Name, 14, y, render.ColorLavender)
-		y += 10
-		render.DrawText(screen, intToStr(q.Progress)+"/"+intToStr(q.Required)+" "+q.Target, 14, y, render.ColorPeach)
+		render.DrawText(screen, "Quest: "+q.Name, 28, y, render.ColorLavender)
+		y += 18
+		render.DrawText(screen, intToStr(q.Progress)+"/"+intToStr(q.Required)+" "+q.Target, 28, y, render.ColorPeach)
 	}
 
-	render.DrawText(screen, "B:Bag M:Map X:Close", 14, 128, render.ColorGray)
+	render.DrawText(screen, "B:Bag M:Map X:Close", 28, 256, render.ColorGray)
+}
+
+// drawDayNightTint draws a colored overlay for the current time of day.
+func (w *WildScreen) drawDayNightTint(screen *ebiten.Image) {
+	if w.player.DayNight == nil {
+		return
+	}
+	tint := w.player.DayNight.TintColor()
+	if tint.A == 0 {
+		return // daytime, no tint
+	}
+	overlay := ebiten.NewImage(320, 288)
+	overlay.Fill(tint)
+	screen.DrawImage(overlay, nil)
 }

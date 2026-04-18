@@ -8,11 +8,11 @@
 // for sequencing animations (e.g., "show attack text → shake sprite →
 // show damage number → update HP bar → pause → next turn").
 //
-// THEORY — Pokemon-style layout at 160x144:
-// The Game Boy screen is tiny, so every pixel counts. Classic layout:
-//   Top area:    Monster sprite + name + HP bar
+// THEORY — Pokemon-style layout at 320x288:
+// The doubled resolution gives us room to breathe. Classic layout:
+//   Top area:    Monster sprite + name + HP bar (spacious)
 //   Middle:      Divider line
-//   Bottom-left: Player stats (name, HP bar, MP bar)
+//   Mid-lower:   Player sprite + stats (name, HP bar, MP bar)
 //   Bottom:      Action menu OR battle text
 //
 // The action menu shows 4 options in a 2x2 grid: Attack, Magic, Defend, Flee.
@@ -49,6 +49,7 @@ const (
 	cuiIntro        combatUIState = iota // "A wild X appeared!" text
 	cuiPlayerMenu                        // action menu visible, awaiting input
 	cuiSkillMenu                         // skill selection sub-menu
+	cuiItemMenu                          // item selection sub-menu
 	cuiPlayerAnim                        // animating player's action
 	cuiEnemyAnim                         // animating enemy's action
 	cuiMessage                           // showing a result message
@@ -103,6 +104,9 @@ type CombatScreen struct {
 	// Skill menu
 	skillIdx int // cursor in skill sub-menu
 
+	// Item menu
+	itemIdx int // cursor in item sub-menu
+
 	// Screen shake
 	shakeIntensity float64
 	shakeX, shakeY float64
@@ -134,6 +138,8 @@ func NewCombatScreen(switcher ScreenSwitcher, player *entity.Player, monster *en
 
 // NewCombatScreenAt creates a combat screen that remembers where the player was.
 func NewCombatScreenAt(switcher ScreenSwitcher, player *entity.Player, monster *entity.Monster, areaKey string, retX, retY int) *CombatScreen {
+	player.ResetCombatBuffs() // clear temporary buffs from previous combat
+	player.TickInnBuff()     // decrement inn buff counter (persists across combats)
 	eng := combat.NewEngine(player, monster)
 	return &CombatScreen{
 		switcher:       switcher,
@@ -181,6 +187,10 @@ func (c *CombatScreen) Update() error {
 		c.updateIntro()
 	case cuiPlayerMenu:
 		c.updatePlayerMenu()
+	case cuiSkillMenu:
+		c.updateSkillMenu()
+	case cuiItemMenu:
+		c.updateItemMenu()
 	case cuiPlayerAnim:
 		c.updatePlayerAnim()
 	case cuiEnemyAnim:
@@ -242,15 +252,28 @@ func (c *CombatScreen) updateIntro() {
 }
 
 func (c *CombatScreen) updatePlayerMenu() {
-	// 2x2 menu navigation
+	// THEORY — 3×2 menu grid with 5 options:
+	// The classic 2×2 grid (Attack/Skill/Defend/Flee) had no room for "Item".
+	// Rather than cramming it into a tiny space, we expand to 3 rows:
+	//   Row 0: Attack | Skill
+	//   Row 1: Item   | Defend
+	//   Row 2: Flee   |
+	// Navigation wraps naturally: left/right toggles column (unless at
+	// index 4 which has no right neighbor), up/down moves by 2.
+	// Index 4 (Flee) sits alone in the bottom-left — a common RPG pattern
+	// that subtly de-emphasizes fleeing by putting it last and isolated.
+
 	if inpututil.IsKeyJustPressed(ebiten.KeyLeft) || inpututil.IsKeyJustPressed(ebiten.KeyA) {
 		if c.menuIdx%2 == 1 {
 			c.menuIdx--
 		}
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyRight) || inpututil.IsKeyJustPressed(ebiten.KeyD) {
-		if c.menuIdx%2 == 0 {
-			c.menuIdx++
+		if c.menuIdx%2 == 0 && c.menuIdx+1 <= 4 {
+			// Don't move right from Flee (index 4) — no neighbor
+			if c.menuIdx < 4 {
+				c.menuIdx++
+			}
 		}
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyUp) || inpututil.IsKeyJustPressed(ebiten.KeyW) {
@@ -259,20 +282,114 @@ func (c *CombatScreen) updatePlayerMenu() {
 		}
 	}
 	if inpututil.IsKeyJustPressed(ebiten.KeyDown) || inpututil.IsKeyJustPressed(ebiten.KeyS) {
-		if c.menuIdx < 2 {
+		if c.menuIdx+2 <= 4 {
 			c.menuIdx += 2
 		}
 	}
 
 	// Confirm action
 	if inpututil.IsKeyJustPressed(ebiten.KeyZ) || inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
-		actions := []combat.Action{
-			combat.ActionAttack,
-			combat.ActionMagic,
-			combat.ActionDefend,
-			combat.ActionFlee,
+		switch c.menuIdx {
+		case 1: // Skill
+			learned := c.player.LearnedSkills()
+			if len(learned) > 0 {
+				c.skillIdx = 0
+				c.uiState = cuiSkillMenu
+				return
+			}
+			// No skills learned — fallback to old class magic
+			c.doPlayerAction(combat.ActionMagic)
+		case 2: // Item
+			consumables := c.player.Consumables()
+			if len(consumables) > 0 {
+				c.itemIdx = 0
+				c.uiState = cuiItemMenu
+				return
+			}
+			// No items — show a message
+			c.msgText = "No items!"
+			c.uiState = cuiMessage
+		default:
+			// 0=Attack, 3=Defend, 4=Flee
+			actions := map[int]combat.Action{
+				0: combat.ActionAttack,
+				3: combat.ActionDefend,
+				4: combat.ActionFlee,
+			}
+			c.doPlayerAction(actions[c.menuIdx])
 		}
-		c.doPlayerAction(actions[c.menuIdx])
+	}
+}
+
+// updateSkillMenu handles input in the skill selection sub-menu.
+func (c *CombatScreen) updateSkillMenu() {
+	learned := c.player.LearnedSkills()
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyUp) || inpututil.IsKeyJustPressed(ebiten.KeyW) {
+		c.skillIdx--
+		if c.skillIdx < 0 {
+			c.skillIdx = len(learned) - 1
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDown) || inpututil.IsKeyJustPressed(ebiten.KeyS) {
+		c.skillIdx++
+		if c.skillIdx >= len(learned) {
+			c.skillIdx = 0
+		}
+	}
+
+	// Confirm skill
+	if inpututil.IsKeyJustPressed(ebiten.KeyZ) || inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+		c.engine.SelectedSkillIdx = c.skillIdx
+		c.doPlayerAction(combat.ActionSkill)
+	}
+
+	// Cancel — back to main menu
+	if inpututil.IsKeyJustPressed(ebiten.KeyX) || inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+		c.uiState = cuiPlayerMenu
+	}
+}
+
+// updateItemMenu handles input in the item selection sub-menu.
+//
+// THEORY — Item sub-menu mirrors skill sub-menu:
+// We reuse the same UX pattern as the skill menu: a scrollable vertical
+// list with cursor, Z to confirm, X to cancel. This consistency means the
+// player only needs to learn one sub-menu pattern. Each entry shows the
+// item name, what it restores (HP/MP), and the restore amount — giving
+// the player enough info to make a tactical choice without opening a
+// separate info screen.
+func (c *CombatScreen) updateItemMenu() {
+	consumables := c.player.Consumables()
+	if len(consumables) == 0 {
+		// Items ran out (shouldn't happen, but safety)
+		c.uiState = cuiPlayerMenu
+		return
+	}
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyUp) || inpututil.IsKeyJustPressed(ebiten.KeyW) {
+		c.itemIdx--
+		if c.itemIdx < 0 {
+			c.itemIdx = len(consumables) - 1
+		}
+	}
+	if inpututil.IsKeyJustPressed(ebiten.KeyDown) || inpututil.IsKeyJustPressed(ebiten.KeyS) {
+		c.itemIdx++
+		if c.itemIdx >= len(consumables) {
+			c.itemIdx = 0
+		}
+	}
+
+	// Confirm item
+	if inpututil.IsKeyJustPressed(ebiten.KeyZ) || inpututil.IsKeyJustPressed(ebiten.KeyEnter) {
+		selected := consumables[c.itemIdx]
+		c.engine.SelectedItemIdx = selected.Idx // pass the real inventory index to the engine
+		c.doPlayerAction(combat.ActionItem)
+	}
+
+	// Cancel — back to main menu
+	if inpututil.IsKeyJustPressed(ebiten.KeyX) || inpututil.IsKeyJustPressed(ebiten.KeyEscape) {
+		c.uiState = cuiPlayerMenu
 	}
 }
 
@@ -283,6 +400,9 @@ func (c *CombatScreen) doPlayerAction(action combat.Action) {
 	c.showDamage = false
 	c.showHeal = false
 
+	// Prepend effect tick messages (DoT damage, buff expiry) to the message queue
+	effectMsgs := c.engine.EffectMessages
+
 	switch c.engine.Phase {
 	case combat.PhaseVictory:
 		// Player killed the monster
@@ -291,7 +411,7 @@ func (c *CombatScreen) doPlayerAction(action combat.Action) {
 			c.showDamage = true
 			c.monsterShakeX = 4
 		}
-		c.msgQueue = []string{result.Message}
+		c.msgQueue = append(effectMsgs, result.Message)
 		if result.IsCrit {
 			c.msgQueue = append(c.msgQueue, "Critical hit!")
 		}
@@ -299,11 +419,11 @@ func (c *CombatScreen) doPlayerAction(action combat.Action) {
 	case combat.PhaseFlee:
 		c.uiState = cuiMessage
 	case combat.PhaseFleeFaild:
-		c.msgQueue = []string{result.Message}
+		c.msgQueue = append(effectMsgs, result.Message)
 		c.uiState = cuiMessage
 	default:
-		// Normal action
-		c.msgQueue = []string{result.Message}
+		// Normal action — effect messages first, then the action result
+		c.msgQueue = append(effectMsgs, result.Message)
 		if result.IsCrit {
 			c.msgQueue = append(c.msgQueue, "Critical hit!")
 			c.shakeIntensity = 6 // big screen shake on crit!
@@ -363,6 +483,13 @@ func (c *CombatScreen) doEnemyTurn() {
 	c.showDamage = false
 	c.showHeal = false
 
+	// Check if enemy was killed by DoT before acting
+	if c.engine.Phase == combat.PhaseVictory {
+		c.msgQueue = append(c.engine.EffectMessages, result.Message)
+		c.startVictory()
+		return
+	}
+
 	if result.Damage > 0 {
 		c.damageNum = result.Damage
 		c.showDamage = true
@@ -378,7 +505,8 @@ func (c *CombatScreen) doEnemyTurn() {
 		}
 	}
 
-	c.msgQueue = []string{result.Message}
+	// Effect messages (DoT on enemy, buff expiry) shown before the attack result
+	c.msgQueue = append(c.engine.EffectMessages, result.Message)
 	c.uiState = cuiEnemyAnim
 }
 
@@ -481,24 +609,56 @@ func (c *CombatScreen) updateLevelUp() {
 	}
 }
 
-// returnAfterVictory goes to the ending screen if boss was defeated,
-// otherwise returns to the wild area at the player's pre-combat position.
+// returnAfterVictory handles post-combat transitions.
+//
+// THEORY — Post-boss continuation:
+// In the original design, defeating the Dragon ended the game. Now bosses
+// are milestones, not endings. Defeating a boss sets a flag in the player's
+// BossDefeated map, which unlocks new content (e.g., defeating the Dragon
+// opens the western desert chain). The game continues — the player returns
+// to the wild area where they fought the boss.
+//
+// The ending screen is now only shown when ALL bosses are defeated (or
+// could be triggered by a final superboss in a future phase). For now,
+// each boss victory returns the player to the world with a congratulatory
+// dialogue shown via the wild screen's boss dialogue system.
 func (c *CombatScreen) returnAfterVictory() {
-	// Broadcast the win to every connected peer so their co-op screens
-	// can apply rewards and exit. Safe when session is nil.
+	// Broadcast the win to every connected peer.
 	if c.session != nil {
 		c.session.EndCombat(true, c.xpGained, c.coinsGained)
 	}
+
 	if c.monster.IsBoss {
-		// Boss defeated — show the ending!
-		c.switcher.SwitchScreen(NewEndingScreen(c.switcher, c.player))
-		return
+		// Record boss defeat
+		if c.player.BossDefeated == nil {
+			c.player.BossDefeated = map[string]bool{}
+		}
+		bossKey := bossKeyFromArea(c.areaKey)
+		c.player.BossDefeated[bossKey] = true
 	}
+
+	// Return to the wild area at the player's pre-combat position.
 	if c.session != nil {
 		c.switcher.SwitchScreen(NewWildScreenMPAt(c.switcher, c.player, c.areaKey, c.returnX, c.returnY, c.session))
 		return
 	}
 	c.switcher.SwitchScreen(NewWildScreenAt(c.switcher, c.player, c.areaKey, c.returnX, c.returnY))
+}
+
+// bossKeyFromArea maps an area key to its boss name for the BossDefeated map.
+func bossKeyFromArea(areaKey string) string {
+	switch areaKey {
+	case "lair":
+		return "dragon"
+	case "ice_cavern":
+		return "ice_wyrm"
+	case "volcano":
+		return "hydra"
+	case "buried_temple":
+		return "sphinx"
+	default:
+		return areaKey
+	}
 }
 
 // syncCombatToSession is the per-tick multiplayer mirror. It's a no-op
@@ -562,7 +722,7 @@ func (c *CombatScreen) updateDefeat() {
 func (c *CombatScreen) Draw(screen *ebiten.Image) {
 	// THEORY — Screen shake via offscreen buffer:
 	// We render the entire combat scene to an offscreen image at native
-	// resolution (160x144), then draw that image onto the real screen
+	// resolution (320x288), then draw that image onto the real screen
 	// with a random offset (shakeX, shakeY). This means EVERY pixel
 	// on screen shifts together — a clean, juicy shake effect like
 	// Vlambeer-style "game feel". The background fill on the real
@@ -577,18 +737,18 @@ func (c *CombatScreen) Draw(screen *ebiten.Image) {
 
 	// Floating damage/heal numbers
 	if c.showDamage {
-		y := 40.0 - c.damageY
+		y := 70.0 - c.damageY
 		if c.uiState == cuiEnemyAnim {
 			// Damage on player
-			y = 75.0 - c.damageY
-			render.DrawText(buf, intToStr(c.damageNum), 120, int(y), render.ColorRed)
+			y = 150.0 - c.damageY
+			render.DrawText(buf, intToStr(c.damageNum), 240, int(y), render.ColorRed)
 		} else {
 			// Damage on monster
-			render.DrawText(buf, intToStr(c.damageNum), 90, int(y), render.ColorGold)
+			render.DrawText(buf, intToStr(c.damageNum), 180, int(y), render.ColorGold)
 		}
 	}
 	if c.showHeal {
-		render.DrawText(buf, "+"+intToStr(c.healNum), 100, 70, render.ColorGreen)
+		render.DrawText(buf, "+"+intToStr(c.healNum), 200, 140, render.ColorGreen)
 	}
 
 	// Blit the buffer onto screen with shake offset
@@ -604,24 +764,27 @@ func (c *CombatScreen) drawMonsterArea(screen *ebiten.Image) {
 	if c.monster.IsGolden {
 		nameClr = render.ColorGold
 	}
-	render.DrawText(screen, c.monster.Name, 4, 2, nameClr)
+	render.DrawText(screen, c.monster.Name, 8, 4, nameClr)
 
-	// Monster HP bar
+	// Monster HP bar — wider bar with more room
 	monFrac := float64(c.displayMonHP) / float64(c.monster.MaxHP)
 	hpColor := hpBarColor(monFrac)
-	render.DrawText(screen, "HP", 4, 11, render.ColorWhite)
-	render.DrawBar(screen, 18, 12, 50, 4, monFrac, hpColor, render.ColorDarkGray)
+	render.DrawText(screen, "HP", 8, 18, render.ColorWhite)
+	render.DrawBar(screen, 30, 19, 120, 6, monFrac, hpColor, render.ColorDarkGray)
 
-	// Monster sprite
+	// Active effects on monster (debuffs from player)
+	c.drawEffectIcons(screen, c.engine.EnemyEffects, 8, 30)
+
+	// Monster sprite — positioned in the right portion of the top area
 	sprite, ok := c.monsterSprites[c.monster.SpriteID]
 	if ok {
 		frame := c.monsterAnim.CurrentFrame()
-		sx := 100.0 + c.monsterShakeX
-		sy := 4.0
+		sx := 220.0 + c.monsterShakeX
+		sy := 8.0
 		if c.monster.IsBoss {
-			sx = 90.0 + c.monsterShakeX
+			sx = 200.0 + c.monsterShakeX
 		} else {
-			sy = 10.0
+			sy = 20.0
 		}
 
 		if c.monster.IsGolden {
@@ -635,45 +798,94 @@ func (c *CombatScreen) drawMonsterArea(screen *ebiten.Image) {
 }
 
 func (c *CombatScreen) drawDivider(screen *ebiten.Image) {
-	for x := 4; x < 156; x += 2 {
-		screen.Set(x, 55, render.ColorDarkGray)
+	for x := 8; x < 312; x += 2 {
+		screen.Set(x, 110, render.ColorDarkGray)
 	}
 }
 
 func (c *CombatScreen) drawPlayerArea(screen *ebiten.Image) {
-	// Player sprite (small, bottom-left)
+	// Player sprite (bottom-left, more room now)
 	sheet := c.charSprites[int(c.player.Class)]
-	sx := 8.0 + c.playerShakeX
-	sheet.DrawFrame(screen, 0, sx, 60.0)
+	sx := 16.0 + c.playerShakeX
+	sheet.DrawFrame(screen, 0, sx, 120.0)
 
-	// Player info
+	// Player info — spread out with generous spacing
 	info := entity.ClassTable[c.player.Class]
-	render.DrawText(screen, info.Name+" Lv."+intToStr(c.player.Level), 30, 58, render.ColorSky)
+	render.DrawText(screen, info.Name+" Lv."+intToStr(c.player.Level), 60, 118, render.ColorSky)
 
-	// HP bar
+	// HP bar — wider with more spacing
 	plrHPFrac := float64(c.displayPlrHP) / float64(c.player.Stats.MaxHP)
 	hpColor := hpBarColor(plrHPFrac)
-	render.DrawText(screen, "HP", 30, 68, render.ColorWhite)
-	render.DrawBar(screen, 44, 69, 60, 4, plrHPFrac, hpColor, render.ColorDarkGray)
-	render.DrawText(screen, intToStr(int(c.displayPlrHP))+"/"+intToStr(c.player.Stats.MaxHP), 108, 68, render.ColorWhite)
+	render.DrawText(screen, "HP", 60, 134, render.ColorWhite)
+	render.DrawBar(screen, 84, 135, 130, 6, plrHPFrac, hpColor, render.ColorDarkGray)
+	render.DrawText(screen, intToStr(int(c.displayPlrHP))+"/"+intToStr(c.player.Stats.MaxHP), 220, 134, render.ColorWhite)
 
-	// MP bar
+	// MP bar — wider with more spacing
 	mpFrac := 0.0
 	if c.player.Stats.MaxMP > 0 {
 		mpFrac = float64(c.player.Stats.MP) / float64(c.player.Stats.MaxMP)
 	}
-	render.DrawText(screen, "MP", 30, 78, render.ColorWhite)
-	render.DrawBar(screen, 44, 79, 60, 4, mpFrac, render.ColorSky, render.ColorDarkGray)
-	render.DrawText(screen, intToStr(c.player.Stats.MP)+"/"+intToStr(c.player.Stats.MaxMP), 108, 78, render.ColorWhite)
+	render.DrawText(screen, "MP", 60, 150, render.ColorWhite)
+	render.DrawBar(screen, 84, 151, 130, 6, mpFrac, render.ColorSky, render.ColorDarkGray)
+	render.DrawText(screen, intToStr(c.player.Stats.MP)+"/"+intToStr(c.player.Stats.MaxMP), 220, 150, render.ColorWhite)
+
+	// Active effects on player (buffs + enemy debuffs)
+	c.drawEffectIcons(screen, c.engine.PlayerEffects, 60, 164)
+}
+
+// drawEffectIcons renders compact status effect indicators.
+//
+// THEORY — Compact effect display:
+// Classic Game Boy RPGs showed status with tiny icons or 3-letter abbreviations
+// next to the character name: "PSN", "SLP", "PAR". We do the same: each active
+// effect gets a 3-4 char label color-coded by category (green=buff, red=debuff,
+// purple=DoT, orange=status). The turn count is shown as a superscript number.
+// This gives the player at-a-glance tactical awareness without cluttering the UI.
+func (c *CombatScreen) drawEffectIcons(screen *ebiten.Image, effects []combat.StatusEffect, startX, y int) {
+	icons := combat.EffectSummary(effects)
+	x := startX
+	for _, icon := range icons {
+		// Pick color based on category
+		var clr color.Color
+		switch icon.Color {
+		case combat.IconBuff:
+			clr = render.ColorGreen
+		case combat.IconDebuff:
+			clr = render.ColorRed
+		case combat.IconDoT:
+			clr = render.ColorLavender
+		case combat.IconStatus:
+			clr = render.ColorGold
+		default:
+			clr = render.ColorGray
+		}
+
+		// Draw abbreviated label + turn count
+		label := icon.Short
+		if icon.Turns > 0 {
+			label += intToStr(icon.Turns)
+		}
+		render.DrawText(screen, label, x, y, clr)
+		x += len(label)*8 + 4 // approximate spacing
+
+		// Don't overflow the screen
+		if x > 280 {
+			break
+		}
+	}
 }
 
 func (c *CombatScreen) drawBottomUI(screen *ebiten.Image) {
-	boxY := 90
-	boxH := 50
+	boxY := 180
+	boxH := 100
 
 	switch c.uiState {
 	case cuiPlayerMenu:
 		c.drawActionMenu(screen, boxY, boxH)
+	case cuiSkillMenu:
+		c.drawSkillSelect(screen, boxY, boxH)
+	case cuiItemMenu:
+		c.drawItemSelect(screen, boxY, boxH)
 	case cuiVictory:
 		c.drawVictoryBox(screen, boxY, boxH)
 	case cuiDefeat:
@@ -682,90 +894,189 @@ func (c *CombatScreen) drawBottomUI(screen *ebiten.Image) {
 		c.drawLevelUpBox(screen, boxY, boxH)
 	default:
 		// Message box
-		render.DrawBox(screen, 4, boxY, 152, boxH, render.ColorBoxBG, render.ColorBoxBorder)
-		render.DrawText(screen, c.msgText, 10, boxY+6, render.ColorWhite)
+		render.DrawBox(screen, 8, boxY, 304, boxH, render.ColorBoxBG, render.ColorBoxBorder)
+		render.DrawText(screen, c.msgText, 20, boxY+12, render.ColorWhite)
 
 		// Show "Z" prompt if waiting for input
 		if c.uiState == cuiMessage || c.uiState == cuiIntro {
 			if (c.tick/20)%2 == 0 {
-				render.DrawText(screen, "Z", 144, boxY+boxH-10, render.ColorGold)
+				render.DrawText(screen, "Z", 292, boxY+boxH-16, render.ColorGold)
 			}
 		}
 	}
 }
 
 func (c *CombatScreen) drawActionMenu(screen *ebiten.Image, boxY, boxH int) {
-	render.DrawBox(screen, 4, boxY, 152, boxH, render.ColorBoxBG, render.ColorBoxBorder)
+	render.DrawBox(screen, 8, boxY, 304, boxH, render.ColorBoxBG, render.ColorBoxBorder)
 
-	// Class-specific skill name
+	// Skill slot label: shows "Skill" if player has learned skills, else class default
 	skillName := "Magic"
-	switch c.player.Class {
-	case entity.ClassKnight:
-		skillName = "Bash"
-	case entity.ClassMage:
-		skillName = "Fire"
-	case entity.ClassArcher:
-		skillName = "Snipe"
+	if len(c.player.LearnedSkills()) > 0 {
+		skillName = "Skill"
+	} else {
+		switch c.player.Class {
+		case entity.ClassKnight:
+			skillName = "Bash"
+		case entity.ClassMage:
+			skillName = "Fire"
+		case entity.ClassArcher:
+			skillName = "Snipe"
+		}
 	}
-	labels := []string{"Attack", skillName, "Defend", "Flee"}
+
+	// 3×2 grid layout:
+	//   0: Attack   1: Skill
+	//   2: Item     3: Defend
+	//   4: Flee
+	labels := []string{"Attack", skillName, "Item", "Defend", "Flee"}
 	positions := [][2]int{
-		{14, boxY + 8},
-		{84, boxY + 8},
-		{14, boxY + 24},
-		{84, boxY + 24},
+		{32, boxY + 10},
+		{180, boxY + 10},
+		{32, boxY + 34},
+		{180, boxY + 34},
+		{32, boxY + 58},
 	}
 
 	for i, label := range labels {
 		clr := color.Color(render.ColorWhite)
 		if i == c.menuIdx {
 			clr = render.ColorGold
-			// Draw cursor
-			render.DrawCursor(screen, positions[i][0]-8, positions[i][1], render.ColorGold)
+			render.DrawCursor(screen, positions[i][0]-10, positions[i][1], render.ColorGold)
 		}
 		render.DrawText(screen, label, positions[i][0], positions[i][1], clr)
 	}
 
+	// Show consumable count next to "Item" as a convenience hint
+	nConsumables := len(c.player.Consumables())
+	render.DrawText(screen, "("+intToStr(nConsumables)+")", 80, boxY+34, render.ColorGray)
+
 	// Subtle hint
-	render.DrawText(screen, "Z:Select", 52, boxY+boxH-10, render.ColorGray)
+	render.DrawText(screen, "Z:Select", 120, boxY+boxH-12, render.ColorGray)
+}
+
+func (c *CombatScreen) drawSkillSelect(screen *ebiten.Image, boxY, boxH int) {
+	render.DrawBox(screen, 8, boxY, 304, boxH, render.ColorBoxBG, render.ColorLavender)
+	render.DrawText(screen, "Skills", 12, boxY+4, render.ColorLavender)
+
+	learned := c.player.LearnedSkills()
+	maxShow := 4
+	startIdx := 0
+	if c.skillIdx >= maxShow {
+		startIdx = c.skillIdx - maxShow + 1
+	}
+
+	for i := startIdx; i < len(learned) && i < startIdx+maxShow; i++ {
+		def := learned[i]
+		lvl := c.player.SkillLevel(def.ID)
+		y := boxY + 22 + (i-startIdx)*18
+
+		clr := color.Color(render.ColorWhite)
+		if i == c.skillIdx {
+			clr = render.ColorGold
+			render.DrawCursor(screen, 14, y, render.ColorGold)
+		}
+
+		render.DrawText(screen, def.Name, 28, y, clr)
+		render.DrawText(screen, "Lv"+intToStr(lvl), 180, y, render.ColorMint)
+		mpCost := def.MPCost[lvl-1]
+		mpClr := color.Color(render.ColorSky)
+		if c.player.Stats.MP < mpCost {
+			mpClr = render.ColorRed // can't afford
+		}
+		render.DrawText(screen, intToStr(mpCost)+"MP", 240, y, mpClr)
+	}
+
+	render.DrawText(screen, "Z:Use X:Back", 100, boxY+boxH-16, render.ColorGray)
+}
+
+// drawItemSelect renders the item selection sub-menu.
+//
+// THEORY — Showing restore type + amount:
+// Unlike the skill menu (which shows MP cost), the item menu shows what
+// each item restores: "HP+15" or "MP+10". This lets the player make an
+// informed choice. Color coding reinforces the distinction: green for HP
+// items, blue/sky for MP items — matching the HP and MP bar colors the
+// player already associates with those stats.
+func (c *CombatScreen) drawItemSelect(screen *ebiten.Image, boxY, boxH int) {
+	render.DrawBox(screen, 8, boxY, 304, boxH, render.ColorBoxBG, render.ColorMint)
+	render.DrawText(screen, "Items", 12, boxY+4, render.ColorMint)
+
+	consumables := c.player.Consumables()
+	maxShow := 4
+	startIdx := 0
+	if c.itemIdx >= maxShow {
+		startIdx = c.itemIdx - maxShow + 1
+	}
+
+	for i := startIdx; i < len(consumables) && i < startIdx+maxShow; i++ {
+		item := consumables[i].Item
+		y := boxY + 22 + (i-startIdx)*18
+
+		clr := color.Color(render.ColorWhite)
+		if i == c.itemIdx {
+			clr = render.ColorGold
+			render.DrawCursor(screen, 14, y, render.ColorGold)
+		}
+
+		render.DrawText(screen, item.Name, 28, y, clr)
+
+		// Show restore type and amount with appropriate color
+		switch item.Consumable {
+		case entity.ConsumeHP:
+			render.DrawText(screen, "HP+"+intToStr(item.StatBoost), 200, y, render.ColorGreen)
+		case entity.ConsumeMP:
+			render.DrawText(screen, "MP+"+intToStr(item.StatBoost), 200, y, render.ColorSky)
+		case entity.ConsumeAntidote:
+			render.DrawText(screen, "Cure", 220, y, render.ColorMint)
+		case entity.ConsumeSmoke:
+			render.DrawText(screen, "Flee", 220, y, render.ColorGray)
+		case entity.ConsumeATKBuff:
+			render.DrawText(screen, "ATK+"+intToStr(item.StatBoost), 200, y, render.ColorPeach)
+		case entity.ConsumeDEFBuff:
+			render.DrawText(screen, "DEF+"+intToStr(item.StatBoost), 200, y, render.ColorSky)
+		}
+	}
+
+	render.DrawText(screen, "Z:Use X:Back", 100, boxY+boxH-16, render.ColorGray)
 }
 
 func (c *CombatScreen) drawVictoryBox(screen *ebiten.Image, boxY, boxH int) {
-	render.DrawBox(screen, 4, boxY, 152, boxH, render.ColorBoxBG, render.ColorBoxBorder)
+	render.DrawBox(screen, 8, boxY, 304, boxH, render.ColorBoxBG, render.ColorBoxBorder)
 
-	render.DrawText(screen, "Victory!", 54, boxY+4, render.ColorGold)
+	render.DrawText(screen, "Victory!", 120, boxY+10, render.ColorGold)
 
 	if c.animTick >= 30 {
-		render.DrawText(screen, "XP +"+intToStr(c.xpGained), 14, boxY+16, render.ColorMint)
-		render.DrawText(screen, "Coins +"+intToStr(c.coinsGained), 14, boxY+26, render.ColorGold)
+		render.DrawText(screen, "XP +"+intToStr(c.xpGained), 28, boxY+34, render.ColorMint)
+		render.DrawText(screen, "Coins +"+intToStr(c.coinsGained), 28, boxY+54, render.ColorGold)
 		if (c.tick/20)%2 == 0 {
-			render.DrawText(screen, "Z:Continue", 46, boxY+boxH-10, render.ColorWhite)
+			render.DrawText(screen, "Z:Continue", 110, boxY+boxH-16, render.ColorWhite)
 		}
 	}
 }
 
 func (c *CombatScreen) drawDefeatBox(screen *ebiten.Image, boxY, boxH int) {
-	render.DrawBox(screen, 4, boxY, 152, boxH, render.ColorBoxBG, render.ColorBoxBorder)
+	render.DrawBox(screen, 8, boxY, 304, boxH, render.ColorBoxBG, render.ColorBoxBorder)
 
-	render.DrawText(screen, "Defeated...", 44, boxY+4, render.ColorRed)
+	render.DrawText(screen, "Defeated...", 110, boxY+10, render.ColorRed)
 
 	if c.animTick >= 30 {
-		render.DrawText(screen, "You wake up in town.", 10, boxY+18, render.ColorWhite)
-		render.DrawText(screen, "Lost some coins...", 14, boxY+28, render.ColorPeach)
+		render.DrawText(screen, "You wake up in town.", 20, boxY+36, render.ColorWhite)
+		render.DrawText(screen, "Lost some coins...", 28, boxY+56, render.ColorPeach)
 		if (c.tick/20)%2 == 0 {
-			render.DrawText(screen, "Z:Continue", 46, boxY+boxH-10, render.ColorWhite)
+			render.DrawText(screen, "Z:Continue", 110, boxY+boxH-16, render.ColorWhite)
 		}
 	}
 }
 
 func (c *CombatScreen) drawLevelUpBox(screen *ebiten.Image, boxY, boxH int) {
-	render.DrawBox(screen, 4, boxY, 152, boxH, render.ColorBoxBG, render.ColorBoxBorder)
+	render.DrawBox(screen, 8, boxY, 304, boxH, render.ColorBoxBG, render.ColorBoxBorder)
 
-	render.DrawText(screen, "Level Up!", 48, boxY+4, render.ColorGold)
-	render.DrawText(screen, "Lv."+intToStr(c.prevLevel)+" -> Lv."+intToStr(c.player.Level), 30, boxY+16, render.ColorMint)
-	render.DrawText(screen, "HP and MP restored!", 14, boxY+28, render.ColorGreen)
+	render.DrawText(screen, "Level Up!", 120, boxY+10, render.ColorGold)
+	render.DrawText(screen, "Lv."+intToStr(c.prevLevel)+" -> Lv."+intToStr(c.player.Level), 80, boxY+34, render.ColorMint)
+	render.DrawText(screen, "HP and MP restored!", 28, boxY+56, render.ColorGreen)
 
 	if (c.tick/20)%2 == 0 {
-		render.DrawText(screen, "Z:Continue", 46, boxY+boxH-10, render.ColorWhite)
+		render.DrawText(screen, "Z:Continue", 110, boxY+boxH-16, render.ColorWhite)
 	}
 }
 
@@ -790,7 +1101,7 @@ func absF(f float64) float64 {
 // getShakeBuffer lazily creates the offscreen buffer for screen shake.
 func (c *CombatScreen) getShakeBuffer() *ebiten.Image {
 	if c.shakeBuf == nil {
-		c.shakeBuf = ebiten.NewImage(160, 144)
+		c.shakeBuf = ebiten.NewImage(320, 288)
 	}
 	return c.shakeBuf
 }

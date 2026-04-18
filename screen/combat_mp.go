@@ -235,49 +235,49 @@ func (c *CombatMPScreen) Draw(screen *ebiten.Image) {
 	if cs.MonsterIsBoss {
 		nameClr = render.ColorGold
 	}
-	render.DrawText(screen, cs.MonsterName, 4, 2, nameClr)
+	render.DrawText(screen, cs.MonsterName, 8, 4, nameClr)
 	if cs.MonsterMax > 0 {
 		frac := float64(cs.MonsterHP) / float64(cs.MonsterMax)
-		render.DrawBar(screen, 4, 12, 100, 4, frac, render.ColorRed, render.ColorDarkGray)
+		render.DrawBar(screen, 8, 24, 200, 8, frac, render.ColorRed, render.ColorDarkGray)
 	}
 	render.DrawText(screen, intToStr(cs.MonsterHP)+"/"+intToStr(cs.MonsterMax),
-		108, 10, render.ColorWhite)
+		216, 20, render.ColorWhite)
 
 	// Monster sprite (right side).
 	if sheet, ok := c.monsterSprites[cs.MonsterSpriteID]; ok {
-		sheet.DrawFrame(screen, 0, 120, 18)
+		sheet.DrawFrame(screen, 0, 240, 36)
 	}
 
 	// --- Round / phase indicator ---
 	roundTag := "Round " + intToStr(cs.RoundNum)
-	render.DrawText(screen, roundTag, 4, 22, render.ColorSky)
+	render.DrawText(screen, roundTag, 8, 44, render.ColorSky)
 	if cs.Phase == netpkg.RoundPhaseCollect {
 		timerStr := "Time: " + intToStr(cs.SecondsLeft) + "s"
 		clr := render.ColorMint
 		if cs.SecondsLeft <= 3 {
 			clr = render.ColorRed
 		}
-		render.DrawText(screen, timerStr, 80, 22, clr)
+		render.DrawText(screen, timerStr, 160, 44, clr)
 	} else if cs.Phase == netpkg.RoundPhaseResolve {
-		render.DrawText(screen, "Resolving...", 80, 22, render.ColorGold)
+		render.DrawText(screen, "Resolving...", 160, 44, render.ColorGold)
 	}
 
 	// --- Party panel ---
-	y := 34
-	render.DrawText(screen, "Party:", 4, y, render.ColorWhite)
-	y += 10
+	y := 68
+	render.DrawText(screen, "Party:", 8, y, render.ColorWhite)
+	y += 16
 	for _, p := range cs.Players {
-		c.drawPartyRow(screen, p, 4, y)
-		y += 10
-		if y > 94 {
+		c.drawPartyRow(screen, p, 8, y)
+		y += 16
+		if y > 188 {
 			break
 		}
 	}
 
 	// --- Log box ---
 	if cs.LastLog != "" {
-		render.DrawBox(screen, 2, 98, 156, 18, render.ColorBoxBG, render.ColorSky)
-		render.DrawText(screen, cs.LastLog, 6, 102, render.ColorWhite)
+		render.DrawBox(screen, 4, 196, 312, 36, render.ColorBoxBG, render.ColorSky)
+		render.DrawText(screen, cs.LastLog, 12, 204, render.ColorWhite)
 	}
 
 	// --- Action menu (collect phase) or "waiting" message ---
@@ -301,7 +301,7 @@ func (c *CombatMPScreen) drawPartyRow(screen *ebiten.Image, p netpkg.CombatPlaye
 	if p.MaxHP > 0 {
 		frac := float64(p.HP) / float64(p.MaxHP)
 		hpClr := hpBarColor(frac)
-		render.DrawBar(screen, x+68, y+1, 50, 4, frac, hpClr, render.ColorDarkGray)
+		render.DrawBar(screen, x+136, y+1, 100, 8, frac, hpClr, render.ColorDarkGray)
 	}
 
 	// Status chip on the far right
@@ -319,7 +319,7 @@ func (c *CombatMPScreen) drawPartyRow(screen *ebiten.Image, p netpkg.CombatPlaye
 	default:
 		chip = "..."
 	}
-	render.DrawText(screen, chip, x+124, y, chipClr)
+	render.DrawText(screen, chip, x+248, y, chipClr)
 }
 
 // actionLabel turns a locked-in action kind into a short visible tag.
@@ -340,30 +340,30 @@ func actionLabel(a string) string {
 // drawActionArea draws the 2×2 menu during collect, or a status line
 // during resolve / once we're locked in.
 func (c *CombatMPScreen) drawActionArea(screen *ebiten.Image, cs netpkg.CombatSharedState) {
-	menuY := 120
+	menuY := 240
 	if c.player.Stats.HP <= 0 {
-		render.DrawText(screen, "You are down...", 40, menuY+6, render.ColorGray)
+		render.DrawText(screen, "You are down...", 96, menuY+10, render.ColorGray)
 		return
 	}
 	if cs.Phase == netpkg.RoundPhaseResolve {
-		render.DrawText(screen, "Watch the action!", 36, menuY+6, render.ColorGray)
+		render.DrawText(screen, "Watch the action!", 88, menuY+10, render.ColorGray)
 		return
 	}
 	if c.submitted {
-		render.DrawText(screen, "Locked in — waiting...", 20, menuY+6, render.ColorMint)
+		render.DrawText(screen, "Locked in — waiting...", 60, menuY+10, render.ColorMint)
 		return
 	}
 	// 2×2 action grid
 	items := []string{"Attack", "Skill", "Defend", "Flee"}
-	colWidth := 68
+	colWidth := 136
 	for i, it := range items {
 		col := i % 2
 		row := i / 2
-		x := 8 + col*colWidth
-		y := menuY + row*12
+		x := 16 + col*colWidth
+		y := menuY + row*18
 		clr := render.ColorWhite
 		if i == c.menuIdx {
-			render.DrawCursor(screen, x-6, y, render.ColorGold)
+			render.DrawCursor(screen, x-8, y, render.ColorGold)
 			clr = render.ColorGold
 		}
 		render.DrawText(screen, it, x, y, clr)

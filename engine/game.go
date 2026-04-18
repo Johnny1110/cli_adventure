@@ -22,10 +22,10 @@ import (
 )
 
 const (
-	// ScreenWidth is the Game Boy horizontal resolution.
-	ScreenWidth = 160
-	// ScreenHeight is the Game Boy vertical resolution.
-	ScreenHeight = 144
+	// ScreenWidth is the logical horizontal resolution (2x Game Boy).
+	ScreenWidth = 320
+	// ScreenHeight is the logical vertical resolution (2x Game Boy).
+	ScreenHeight = 288
 )
 
 // Game is the root struct implementing ebiten.Game.

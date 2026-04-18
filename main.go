@@ -11,8 +11,9 @@ import (
 func main() {
 	game := engine.NewGame()
 
-	// Game Boy resolution (160x144) scaled up 4x to a visible window
-	ebiten.SetWindowSize(160*4, 144*4)
+	// 320x288 logical resolution (2x Game Boy) scaled 3x to a visible window.
+	// This gives us a 960x864 window — comfortable on modern monitors.
+	ebiten.SetWindowSize(320*3, 288*3)
 	ebiten.SetWindowTitle("CLI Adventure")
 	ebiten.SetWindowResizingMode(ebiten.WindowResizingModeEnabled)
 

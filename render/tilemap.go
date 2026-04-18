@@ -27,7 +27,9 @@ import (
 )
 
 const (
-	TileSize = 16 // pixels per tile edge
+	TileSize     = 16  // pixels per tile edge
+	ViewportW    = 320 // screen width in pixels (must match engine.ScreenWidth)
+	ViewportH    = 288 // screen height in pixels (must match engine.ScreenHeight)
 )
 
 // TileMap represents a 2D tile-based map with collision data.
@@ -86,8 +88,8 @@ func (m *TileMap) drawLayer(dst *ebiten.Image, layer [][]int, camX, camY int) {
 	startTX := camX / TileSize
 	startTY := camY / TileSize
 	// +2 to handle partial tiles at edges
-	endTX := startTX + (160/TileSize) + 2
-	endTY := startTY + (144/TileSize) + 2
+	endTX := startTX + (ViewportW/TileSize) + 2
+	endTY := startTY + (ViewportH/TileSize) + 2
 
 	for ty := startTY; ty < endTY; ty++ {
 		for tx := startTX; tx < endTX; tx++ {
@@ -143,8 +145,8 @@ func NewCamera(mapW, mapH int) *Camera {
 // player's center pixel position.
 func (c *Camera) Follow(worldX, worldY int) {
 	// Center the viewport on the target
-	c.targetX = worldX - 160/2
-	c.targetY = worldY - 144/2
+	c.targetX = worldX - ViewportW/2
+	c.targetY = worldY - ViewportH/2
 
 	// Clamp to map boundaries
 	if c.targetX < 0 {
@@ -153,8 +155,8 @@ func (c *Camera) Follow(worldX, worldY int) {
 	if c.targetY < 0 {
 		c.targetY = 0
 	}
-	maxX := c.MapW - 160
-	maxY := c.MapH - 144
+	maxX := c.MapW - ViewportW
+	maxY := c.MapH - ViewportH
 	if maxX < 0 {
 		maxX = 0
 	}

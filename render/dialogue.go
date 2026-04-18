@@ -140,9 +140,9 @@ func (d *DialogueBox) Draw(dst *ebiten.Image) {
 		return
 	}
 
-	// Box dimensions
-	bx, by := 4, 104
-	bw, bh := 152, 36
+	// Box dimensions — positioned at the bottom of the 320x288 screen
+	bx, by := 8, 216
+	bw, bh := 304, 64
 
 	// Draw box background and border
 	DrawBox(dst, bx, by, bw, bh, ColorBoxBG, ColorBoxBorder)
@@ -153,7 +153,7 @@ func (d *DialogueBox) Draw(dst *ebiten.Image) {
 		if d.visibleChars < len(d.fullText) {
 			visible = d.fullText[:d.visibleChars]
 		}
-		DrawText(dst, visible, bx+4, by+4, ColorWhite)
+		DrawText(dst, visible, bx+8, by+8, ColorWhite)
 	}
 
 	// "continue" indicator when text is fully revealed
@@ -164,8 +164,8 @@ func (d *DialogueBox) Draw(dst *ebiten.Image) {
 
 	// Draw choices if active
 	if d.ShowChoices {
-		choiceBoxW := 60
-		choiceBoxH := len(d.Choices)*(GlyphH+3) + 6
+		choiceBoxW := 100
+		choiceBoxH := len(d.Choices)*(GlyphH+6) + 10
 		choiceBoxX := bx + bw - choiceBoxW - 2
 		choiceBoxY := by - choiceBoxH - 2
 
@@ -173,7 +173,7 @@ func (d *DialogueBox) Draw(dst *ebiten.Image) {
 			ColorBoxBG, ColorBoxBorder)
 
 		for i, choice := range d.Choices {
-			cy := choiceBoxY + 3 + i*(GlyphH+3)
+			cy := choiceBoxY + 5 + i*(GlyphH+6)
 			clr := color.Color(ColorWhite)
 			if i == d.SelectedChoice {
 				DrawCursor(dst, choiceBoxX+3, cy, ColorGold)

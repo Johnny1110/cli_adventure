@@ -284,7 +284,7 @@ func (w *WormholeScreen) Draw(screen *ebiten.Image) {
 
 	// Title
 	title := "WORMHOLE"
-	render.DrawText(screen, title, (160-render.TextWidth(title))/2, 8, render.ColorLavender)
+	render.DrawText(screen, title, (320-render.TextWidth(title))/2, 16, render.ColorLavender)
 
 	switch w.state {
 	case wormholeMenu:
@@ -304,13 +304,13 @@ func (w *WormholeScreen) drawBackdrop(screen *ebiten.Image) {
 	// stays readable.
 	t := float64(w.tick) / 30.0
 	for i := 0; i < 8; i++ {
-		radius := 10 + i*6
+		radius := 20 + i*12
 		phase := t + float64(i)
 		for a := 0; a < 24; a++ {
 			ang := float64(a)*0.2618 + phase
-			cx := 80 + int(float64(radius)*cosApprox(ang))
-			cy := 72 + int(float64(radius)*sinApprox(ang))
-			if cx >= 0 && cx < 160 && cy >= 0 && cy < 144 {
+			cx := 160 + int(float64(radius)*cosApprox(ang))
+			cy := 144 + int(float64(radius)*sinApprox(ang))
+			if cx >= 0 && cx < 320 && cy >= 0 && cy < 288 {
 				r := uint8(80 + i*15)
 				g := uint8(40 + i*10)
 				b := uint8(120 + i*10)
@@ -322,22 +322,22 @@ func (w *WormholeScreen) drawBackdrop(screen *ebiten.Image) {
 
 func (w *WormholeScreen) drawMenu(screen *ebiten.Image) {
 	items := []string{"Host Room", "Find Room", "Back"}
-	y0 := 44
-	render.DrawBox(screen, 24, 36, 112, 60, render.ColorBoxBG, render.ColorLavender)
+	y0 := 88
+	render.DrawBox(screen, 48, 72, 224, 120, render.ColorBoxBG, render.ColorLavender)
 	for i, it := range items {
 		clr := render.ColorWhite
 		if i == w.menuCursor {
-			render.DrawCursor(screen, 32, y0+i*14, render.ColorGold)
+			render.DrawCursor(screen, 64, y0+i*24, render.ColorGold)
 			clr = render.ColorGold
 		}
-		render.DrawText(screen, it, 44, y0+i*14, clr)
+		render.DrawText(screen, it, 88, y0+i*24, clr)
 	}
-	render.DrawText(screen, "Z:OK  X:Back", 44, 128, render.ColorGray)
+	render.DrawText(screen, "Z:OK  X:Back", 104, 260, render.ColorGray)
 }
 
 func (w *WormholeScreen) drawRoomList(screen *ebiten.Image) {
-	render.DrawBox(screen, 6, 22, 148, 110, render.ColorBoxBG, render.ColorSky)
-	render.DrawText(screen, "Finding rooms...", 12, 26, render.ColorSky)
+	render.DrawBox(screen, 12, 44, 296, 220, render.ColorBoxBG, render.ColorSky)
+	render.DrawText(screen, "Finding rooms...", 24, 52, render.ColorSky)
 
 	if len(w.rooms) == 0 {
 		elapsed := int(time.Since(w.scanStart).Seconds())
@@ -345,70 +345,70 @@ func (w *WormholeScreen) drawRoomList(screen *ebiten.Image) {
 		for i := 0; i < elapsed%4; i++ {
 			msg += "."
 		}
-		render.DrawText(screen, msg, 12, 44, render.ColorGray)
-		render.DrawText(screen, "No rooms yet on LAN.", 12, 60, render.ColorGray)
-		render.DrawText(screen, "Ask a friend to Host!", 12, 72, render.ColorGray)
+		render.DrawText(screen, msg, 24, 88, render.ColorGray)
+		render.DrawText(screen, "No rooms yet on LAN.", 24, 120, render.ColorGray)
+		render.DrawText(screen, "Ask a friend to Host!", 24, 144, render.ColorGray)
 	} else {
 		for i, r := range w.rooms {
-			y := 40 + i*12
+			y := 80 + i*18
 			clr := render.ColorWhite
 			if i == w.listCursor {
-				render.DrawCursor(screen, 10, y, render.ColorGold)
+				render.DrawCursor(screen, 20, y, render.ColorGold)
 				clr = render.ColorGold
 			}
 			line := r.Name
 			if len(line) > 18 {
 				line = line[:18]
 			}
-			render.DrawText(screen, line, 20, y, clr)
+			render.DrawText(screen, line, 40, y, clr)
 			count := intToStr(r.Players) + "/" + intToStr(r.MaxPeers)
-			render.DrawText(screen, count, 128, y, render.ColorPeach)
+			render.DrawText(screen, count, 256, y, render.ColorPeach)
 		}
 	}
-	render.DrawText(screen, "Z:Join  X:Back", 38, 136-14, render.ColorGray)
+	render.DrawText(screen, "Z:Join  X:Back", 100, 248, render.ColorGray)
 }
 
 func (w *WormholeScreen) drawLobby(screen *ebiten.Image) {
-	render.DrawBox(screen, 8, 24, 144, 108, render.ColorBoxBG, render.ColorMint)
+	render.DrawBox(screen, 16, 48, 288, 216, render.ColorBoxBG, render.ColorMint)
 
 	if w.role == netpkg.RoleHost {
-		render.DrawText(screen, "Hosting room:", 14, 28, render.ColorMint)
-		render.DrawText(screen, w.session.MyName()+"'s", 14, 40, render.ColorWhite)
-		render.DrawText(screen, "Waiting for friends...", 14, 56, render.ColorGray)
+		render.DrawText(screen, "Hosting room:", 28, 56, render.ColorMint)
+		render.DrawText(screen, w.session.MyName()+"'s", 28, 80, render.ColorWhite)
+		render.DrawText(screen, "Waiting for friends...", 28, 112, render.ColorGray)
 	} else {
-		render.DrawText(screen, "Joined room!", 14, 28, render.ColorMint)
+		render.DrawText(screen, "Joined room!", 28, 56, render.ColorMint)
 	}
 
 	// Peer list
 	peers := w.session.RemotePlayers("")
-	render.DrawText(screen, "Players:", 14, 74, render.ColorSky)
-	y := 86
+	render.DrawText(screen, "Players:", 28, 148, render.ColorSky)
+	y := 172
 	// Include self first
-	render.DrawText(screen, "> "+w.session.MyName()+" (you)", 16, y, render.ColorGold)
-	y += 10
+	render.DrawText(screen, "> "+w.session.MyName()+" (you)", 32, y, render.ColorGold)
+	y += 18
 	for _, p := range peers {
-		render.DrawText(screen, "  "+p.Name, 16, y, render.ColorWhite)
-		y += 10
-		if y > 118 {
+		render.DrawText(screen, "  "+p.Name, 32, y, render.ColorWhite)
+		y += 18
+		if y > 236 {
 			break
 		}
 	}
 
-	render.DrawText(screen, "Z:Start  X:Cancel", 32, 124, render.ColorGray)
+	render.DrawText(screen, "Z:Start  X:Cancel", 88, 252, render.ColorGray)
 }
 
 func (w *WormholeScreen) drawError(screen *ebiten.Image) {
-	render.DrawBox(screen, 8, 48, 144, 56, render.ColorBoxBG, render.ColorRed)
-	render.DrawText(screen, "Problem", 62, 54, render.ColorRed)
-	// Word wrap the error to ~24 chars/line.
-	lines := wrapText(w.errMsg, 24)
+	render.DrawBox(screen, 16, 96, 288, 112, render.ColorBoxBG, render.ColorRed)
+	render.DrawText(screen, "Problem", 136, 108, render.ColorRed)
+	// Word wrap the error to ~40 chars/line (wider screen).
+	lines := wrapText(w.errMsg, 40)
 	for i, ln := range lines {
 		if i > 3 {
 			break
 		}
-		render.DrawText(screen, ln, 14, 66+i*10, render.ColorWhite)
+		render.DrawText(screen, ln, 28, 132+i*16, render.ColorWhite)
 	}
-	render.DrawText(screen, "Z:OK", 72, 94, render.ColorGray)
+	render.DrawText(screen, "Z:OK", 148, 192, render.ColorGray)
 }
 
 // ---- small helpers ----
